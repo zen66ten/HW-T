@@ -10,19 +10,26 @@ import (
 
 // Provider adapts the hwmon walker to the core provider contract.
 type Provider struct {
-	root  string
-	chips map[core.DeviceID]Chip
+	root     string
+	interval time.Duration
+	chips    map[core.DeviceID]Chip
 }
 
-func New(sysfsRoot string) *Provider {
+// New builds the hwmon provider. interval <= 0 uses the fast-group default
+// (1s per §4.3).
+func New(sysfsRoot string, interval time.Duration) *Provider {
+	if interval <= 0 {
+		interval = time.Second
+	}
 	return &Provider{
-		root:  sysfsRoot + "/class/hwmon",
-		chips: map[core.DeviceID]Chip{},
+		root:     sysfsRoot + "/class/hwmon",
+		interval: interval,
+		chips:    map[core.DeviceID]Chip{},
 	}
 }
 
 func (p *Provider) Name() string                   { return "hwmon" }
-func (p *Provider) DefaultInterval() time.Duration { return time.Second }
+func (p *Provider) DefaultInterval() time.Duration { return p.interval }
 
 func (p *Provider) Discover(ctx context.Context) ([]core.Device, error) {
 	chips, err := Discover(p.root)

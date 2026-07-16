@@ -11,17 +11,19 @@ import (
 const maxStrikes = 3
 
 // Scheduler runs discovery once per provider, then polls each provider's
-// devices at its interval. Providers are crash-isolated: a panic is
-// recovered, and repeated panics quarantine the provider without touching
-// the daemon or its siblings.
+// devices at its own DefaultInterval (poll groups per §4.3: fast/medium/slow
+// providers each configure their own cadence at construction time; the
+// scheduler never overrides it, so a slow SMART poll never gets forced onto
+// a 1s cadence just because hwmon wants one). Providers are crash-isolated:
+// a panic is recovered, and repeated panics quarantine the provider without
+// touching the daemon or its siblings.
 type Scheduler struct {
 	reg       *Registry
 	providers []Provider
-	interval  time.Duration // overrides provider default when > 0
 }
 
-func NewScheduler(reg *Registry, interval time.Duration, providers ...Provider) *Scheduler {
-	return &Scheduler{reg: reg, providers: providers, interval: interval}
+func NewScheduler(reg *Registry, providers ...Provider) *Scheduler {
+	return &Scheduler{reg: reg, providers: providers}
 }
 
 // Start discovers all providers and launches their poll loops. It returns
@@ -40,9 +42,6 @@ func (s *Scheduler) Start(ctx context.Context) {
 		interval := p.DefaultInterval()
 		if interval == 0 {
 			continue // static inventory: no poll loop
-		}
-		if s.interval > 0 {
-			interval = s.interval
 		}
 		go s.poll(ctx, p, devs, interval)
 	}

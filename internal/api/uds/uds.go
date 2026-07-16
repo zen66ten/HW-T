@@ -21,26 +21,44 @@ import (
 
 // Request is one client command.
 type Request struct {
-	Op         string `json:"op"` // sensors | devices | history | reset | subscribe
-	ID         string `json:"id,omitempty"`
-	IntervalMs int    `json:"interval_ms,omitempty"`
+	Op         string   `json:"op"` // sensors | devices | history | reset | subscribe | alerts | log_start | log_stop | log_mark | log_status
+	ID         string   `json:"id,omitempty"`
+	IntervalMs int      `json:"interval_ms,omitempty"`
+	Path       string   `json:"path,omitempty"`    // log_start
+	Format     string   `json:"format,omitempty"`  // log_start: csv | ndjson
+	Note       string   `json:"note,omitempty"`    // log_mark
+	Sensors    []string `json:"sensors,omitempty"` // log_start: column subset
+}
+
+// LogStatus reports the logging state.
+type LogStatus struct {
+	Active bool   `json:"active"`
+	Path   string `json:"path,omitempty"`
+	Format string `json:"format,omitempty"`
 }
 
 // Response is the answer to a request, or one subscription event.
 type Response struct {
-	OK          bool              `json:"ok"`
-	Error       string            `json:"error,omitempty"`
-	Event       string            `json:"event,omitempty"`
-	Sensors     []core.Sensor     `json:"sensors,omitempty"`
-	Devices     []core.Device     `json:"devices,omitempty"`
-	History     []core.Point      `json:"history,omitempty"`
-	Quarantined map[string]string `json:"quarantined,omitempty"`
+	OK          bool               `json:"ok"`
+	Error       string             `json:"error,omitempty"`
+	Event       string             `json:"event,omitempty"`
+	Sensors     []core.Sensor      `json:"sensors,omitempty"`
+	Devices     []core.Device      `json:"devices,omitempty"`
+	History     []core.Point       `json:"history,omitempty"`
+	Quarantined map[string]string  `json:"quarantined,omitempty"`
+	Alerts      []core.AlertStatus `json:"alerts,omitempty"`
+	Log         *LogStatus         `json:"log,omitempty"`
 }
 
-// Server answers requests from the registry.
+// Server answers requests from the registry. Logger and Alerts are
+// optional; ops touching an absent subsystem return an error.
 type Server struct {
-	reg *core.Registry
-	ln  net.Listener
+	reg    *core.Registry
+	ln     net.Listener
+	Logger *core.Logger
+	Alerts *core.AlertEngine
+	// DefaultLogPath is used by log_start when the client gives no path.
+	DefaultLogPath string
 }
 
 // Listen binds the socket, replacing a stale one, and applies the §9
@@ -127,9 +145,57 @@ func (s *Server) respond(req Request) Response {
 			return Response{Error: "unknown sensor: " + req.ID}
 		}
 		return Response{OK: true}
+	case "alerts":
+		if s.Alerts == nil {
+			return Response{OK: true} // no rules configured
+		}
+		return Response{OK: true, Alerts: s.Alerts.Statuses()}
+	case "log_start":
+		if s.Logger == nil {
+			return Response{Error: "logging not available"}
+		}
+		path := req.Path
+		if path == "" {
+			path = s.DefaultLogPath
+		}
+		if path == "" {
+			return Response{Error: "no log path given and no default configured"}
+		}
+		var ids []core.SensorID
+		for _, id := range req.Sensors {
+			ids = append(ids, core.SensorID(id))
+		}
+		if err := s.Logger.Start(path, core.LogFormat(req.Format), ids); err != nil {
+			return Response{Error: err.Error()}
+		}
+		return Response{OK: true, Log: s.logStatus()}
+	case "log_stop":
+		if s.Logger == nil {
+			return Response{Error: "logging not available"}
+		}
+		if err := s.Logger.Stop(); err != nil {
+			return Response{Error: err.Error()}
+		}
+		return Response{OK: true}
+	case "log_mark":
+		if s.Logger == nil {
+			return Response{Error: "logging not available"}
+		}
+		s.Logger.Mark(req.Note)
+		return Response{OK: true}
+	case "log_status":
+		if s.Logger == nil {
+			return Response{OK: true, Log: &LogStatus{}}
+		}
+		return Response{OK: true, Log: s.logStatus()}
 	default:
 		return Response{Error: "unknown op: " + req.Op}
 	}
+}
+
+func (s *Server) logStatus() *LogStatus {
+	active, path, format := s.Logger.Status()
+	return &LogStatus{Active: active, Path: path, Format: string(format)}
 }
 
 func (s *Server) stream(ctx context.Context, enc *json.Encoder, req Request) {

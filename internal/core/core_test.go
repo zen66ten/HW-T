@@ -153,7 +153,7 @@ func TestSchedulerQuarantinesPanickingProvider(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sched := NewScheduler(reg, 0, bad, good)
+	sched := NewScheduler(reg, bad, good)
 	sched.Start(ctx)
 
 	deadline := time.After(2 * time.Second)
@@ -179,7 +179,7 @@ func TestSchedulerQuarantinesPanickingProvider(t *testing.T) {
 
 func TestSchedulerDiscoveryFailure(t *testing.T) {
 	reg := NewRegistry(16)
-	sched := NewScheduler(reg, 0, &failingDiscovery{})
+	sched := NewScheduler(reg, &failingDiscovery{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sched.Start(ctx)

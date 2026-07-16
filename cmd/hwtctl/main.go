@@ -16,10 +16,15 @@ import (
 const usage = `usage: hwtctl [-socket path] <command>
 
 commands:
-  sensors [-json]      current values with min/max/avg
-  devices [-json]      discovered devices incl. DMI inventory
-  history -id <id>     buffered samples for one sensor (JSON)
-  reset [-id <id>]     reset min/max/avg (all sensors when -id omitted)
+  sensors [-json]         current values with min/max/avg
+  devices [-json]         discovered devices incl. DMI inventory
+  history -id <id>        buffered samples for one sensor (JSON)
+  reset [-id <id>]        reset min/max/avg (all sensors when -id omitted)
+  alerts [-json]          state of configured alert rules
+  log start [-path p] [-format csv|ndjson] [-sensors id,id,...]
+  log stop
+  log mark <note>         attach a note to the next logged row
+  log status
 `
 
 func main() {
@@ -49,6 +54,10 @@ func main() {
 		runHistory(c, rest)
 	case "reset":
 		runReset(c, rest)
+	case "alerts":
+		runAlerts(c, rest)
+	case "log":
+		runLog(c, rest)
 	default:
 		flag.Usage()
 		os.Exit(2)
@@ -153,4 +162,76 @@ func runReset(c *client.Client, args []string) {
 		fatal(err)
 	}
 	fmt.Println("ok")
+}
+
+func runAlerts(c *client.Client, args []string) {
+	fs := flag.NewFlagSet("alerts", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "output JSON")
+	fs.Parse(args)
+
+	alerts, err := c.Alerts()
+	if err != nil {
+		fatal(err)
+	}
+	if *asJSON {
+		printJSON(alerts)
+		return
+	}
+	if len(alerts) == 0 {
+		fmt.Println("no alert rules configured")
+		return
+	}
+	fmt.Printf("%-20s%-10s%12s  %s\n", "Rule", "State", "Value", "Sensor")
+	for _, a := range alerts {
+		fmt.Printf("%-20s%-10s%12.1f  %s\n", a.Name, a.State, a.Value, a.Sensor)
+	}
+}
+
+func runLog(c *client.Client, args []string) {
+	if len(args) == 0 {
+		fatal(fmt.Errorf("log requires a subcommand: start | stop | mark | status"))
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "start":
+		fs := flag.NewFlagSet("log start", flag.ExitOnError)
+		path := fs.String("path", "", "log file (daemon default when empty)")
+		format := fs.String("format", "csv", "csv or ndjson")
+		sensorList := fs.String("sensors", "", "comma-separated sensor IDs (all when empty)")
+		fs.Parse(rest)
+		var sensors []string
+		if *sensorList != "" {
+			sensors = strings.Split(*sensorList, ",")
+		}
+		st, err := c.LogStart(*path, *format, sensors)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("logging to %s (%s)\n", st.Path, st.Format)
+	case "stop":
+		if err := c.LogStop(); err != nil {
+			fatal(err)
+		}
+		fmt.Println("logging stopped")
+	case "mark":
+		if len(rest) == 0 {
+			fatal(fmt.Errorf(`log mark requires a note argument`))
+		}
+		if err := c.LogMark(strings.Join(rest, " ")); err != nil {
+			fatal(err)
+		}
+		fmt.Println("ok")
+	case "status":
+		st, err := c.LogStatus()
+		if err != nil {
+			fatal(err)
+		}
+		if st == nil || !st.Active {
+			fmt.Println("logging inactive")
+			return
+		}
+		fmt.Printf("logging to %s (%s)\n", st.Path, st.Format)
+	default:
+		fatal(fmt.Errorf("unknown log subcommand %q", sub))
+	}
 }

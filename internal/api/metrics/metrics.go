@@ -22,24 +22,35 @@ var kindMetrics = map[core.Kind]string{
 	core.KindEnergy:   "hwt_energy_joules",
 	core.KindHumidity: "hwt_humidity_percent",
 	core.KindFreq:     "hwt_freq_hertz",
+	core.KindHealth:   "hwt_health_ok",
+	core.KindPercent:  "hwt_percent",
+	core.KindCount:    "hwt_count",
+	core.KindData:     "hwt_data_bytes",
 }
 
 var sensorLabels = []string{"id", "chip", "label"}
 
 type collector struct {
-	reg   *core.Registry
-	descs map[core.Kind]*prometheus.Desc
-	up    *prometheus.Desc
+	reg    *core.Registry
+	descs  map[core.Kind]*prometheus.Desc
+	up     *prometheus.Desc
+	alert  *prometheus.Desc
+	alerts func() []core.AlertStatus // nil when no alert engine configured
 }
 
 // Handler returns the /metrics HTTP handler backed by the registry.
-func Handler(reg *core.Registry) http.Handler {
+// alerts may be nil; when set, each rule exports hwt_alert_firing{rule}.
+func Handler(reg *core.Registry, alerts func() []core.AlertStatus) http.Handler {
 	c := &collector{
-		reg:   reg,
-		descs: map[core.Kind]*prometheus.Desc{},
+		reg:    reg,
+		descs:  map[core.Kind]*prometheus.Desc{},
+		alerts: alerts,
 		up: prometheus.NewDesc("hwt_provider_up",
 			"1 when the provider is healthy, 0 when quarantined or failed.",
 			[]string{"provider"}, nil),
+		alert: prometheus.NewDesc("hwt_alert_firing",
+			"1 while the alert rule is firing, 0 otherwise.",
+			[]string{"rule", "sensor"}, nil),
 	}
 	for kind, name := range kindMetrics {
 		c.descs[kind] = prometheus.NewDesc(name,
@@ -55,6 +66,7 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 		ch <- d
 	}
 	ch <- c.up
+	ch <- c.alert
 }
 
 func (c *collector) Collect(ch chan<- prometheus.Metric) {
@@ -71,8 +83,11 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 			continue
 		}
 		v := s.Cur
-		if s.Kind == core.KindFreq {
+		switch s.Kind {
+		case core.KindFreq:
 			v *= 1e6 // MHz -> Hz, Prometheus base units
+		case core.KindData:
+			v *= 1 << 20 // MiB -> bytes
 		}
 		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, v,
 			string(s.ID), s.DeviceName, s.Label)
@@ -91,6 +106,16 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	for p := range quarantined {
 		if !providers[p] {
 			ch <- prometheus.MustNewConstMetric(c.up, prometheus.GaugeValue, 0, p)
+		}
+	}
+
+	if c.alerts != nil {
+		for _, a := range c.alerts() {
+			v := 0.0
+			if a.State == core.AlertFiring {
+				v = 1
+			}
+			ch <- prometheus.MustNewConstMetric(c.alert, prometheus.GaugeValue, v, a.Name, string(a.Sensor))
 		}
 	}
 }

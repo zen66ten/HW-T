@@ -22,6 +22,10 @@ const (
 	KindEnergy   Kind = "energy"
 	KindHumidity Kind = "humidity"
 	KindFreq     Kind = "freq"
+	KindHealth   Kind = "health" // 1 = passed/OK, 0 = failed
+	KindPercent  Kind = "percent"
+	KindCount    Kind = "count" // dimensionless counter (media errors, power-on hours, ...)
+	KindData     Kind = "data"  // memory amounts, MiB
 )
 
 // Unit returns the presentation unit for a kind.
@@ -43,6 +47,10 @@ func (k Kind) Unit() string {
 		return "%RH"
 	case KindFreq:
 		return "MHz"
+	case KindPercent:
+		return "%"
+	case KindData:
+		return "MiB"
 	default:
 		return ""
 	}
@@ -67,6 +75,17 @@ func FormatValue(k Kind, v float64) string {
 		return fmt.Sprintf("%.1f %%RH", v)
 	case KindFreq:
 		return fmt.Sprintf("%.0f MHz", v)
+	case KindHealth:
+		if v != 0 {
+			return "PASSED"
+		}
+		return "FAILED"
+	case KindPercent:
+		return fmt.Sprintf("%.1f%%", v)
+	case KindCount:
+		return fmt.Sprintf("%.0f", v)
+	case KindData:
+		return fmt.Sprintf("%.0f MiB", v)
 	default:
 		return fmt.Sprintf("%.0f", v)
 	}
