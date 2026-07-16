@@ -37,7 +37,7 @@ func TestDiscover(t *testing.T) {
 			},
 		},
 		{
-			name: "iwlwifi_1", stablePath: "virtual",
+			name: "iwlwifi_1", stablePath: "virtual/iwlwifi_1",
 			channels: []Channel{
 				{ID: "temp1", Kind: KindTemp, Index: 1, Label: "temp1"},
 			},

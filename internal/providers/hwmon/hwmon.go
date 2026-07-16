@@ -107,10 +107,16 @@ func Discover(root string) ([]Chip, error) {
 		if err != nil {
 			continue
 		}
+		sp := stablePath(dir)
+		if sp == "" {
+			// No device link at all: key by chip name so two virtual
+			// chips never collide.
+			sp = "virtual/" + name
+		}
 		chips = append(chips, Chip{
 			Name:       name,
 			Hwmon:      e.Name(),
-			StablePath: stablePath(dir),
+			StablePath: sp,
 			Channels:   discoverChannels(dir),
 		})
 	}
@@ -199,12 +205,12 @@ func discoverChannels(dir string) []Channel {
 }
 
 // stablePath derives a boot-stable identity for the chip from its device
-// symlink (platform/PCI/I2C/USB topology). Chips without a device link are
-// virtual (e.g. iwlwifi, thermal zones re-exported by drivers).
+// symlink (platform/PCI/I2C/USB topology). Returns "" for chips without a
+// device link.
 func stablePath(hwmonDir string) string {
 	resolved, err := filepath.EvalSymlinks(filepath.Join(hwmonDir, "device"))
 	if err != nil {
-		return "virtual"
+		return ""
 	}
 	_, rel, found := strings.Cut(resolved, "/devices/")
 	if !found {

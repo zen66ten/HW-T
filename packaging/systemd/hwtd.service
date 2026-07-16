@@ -1,0 +1,28 @@
+[Unit]
+Description=HW-T hardware monitoring daemon
+Documentation=https://github.com/zen66ten/HW-T
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hwtd
+Restart=on-failure
+RestartSec=5
+
+# Hardening (SPEC §9): the daemon only reads hardware state.
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
