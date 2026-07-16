@@ -3,16 +3,11 @@ SPEC.md
 CLAUDE.md
 
 # Build output
-target/
+/hwt
+/hwtd
+/hwtctl
 dist/
 build/
-*.o
-*.a
-*.so
-*.so.*
-
-# Rust
-Cargo.lock
 
 # Editor / IDE
 .vscode/

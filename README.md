@@ -13,11 +13,25 @@ HW-T is a hardware monitoring application for Linux that combines deep hardware 
 
 ## Status
 
-Early development.
+Phase 0 spike: `hwt` enumerates hwmon chips and cpufreq from sysfs and prints a
+sensors-style table with labels, values, and thresholds.
 
 ## Building
 
-_Build instructions to be added._
+Requires Go 1.24+.
+
+```
+go build ./cmd/hwt
+./hwt
+```
+
+Providers read from a configurable sysfs root, so captured fixture trees run
+the same code paths as real hardware:
+
+```
+go test ./...
+./hwt -sysfs testdata/fixtures/basic/sys
+```
 
 ## License
 
