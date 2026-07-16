@@ -1,0 +1,27 @@
+# Private project docs
+SPEC.md
+CLAUDE.md
+
+# Build output
+target/
+dist/
+build/
+*.o
+*.a
+*.so
+*.so.*
+
+# Rust
+Cargo.lock
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+.directory
