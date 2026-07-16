@@ -162,8 +162,8 @@ func (m model) buildLines() []string {
 	for _, s := range m.sensors {
 		if s.Device != lastDev {
 			lastDev = s.Device
-			path := strings.TrimPrefix(s.Device, s.Provider+":")
-			lines = append(lines, deviceStyle.Render(s.DeviceName)+headerStyle.Render("  "+path))
+			path := core.ShortenPath(strings.TrimPrefix(s.Device, s.Provider+":"), 40)
+			lines = append(lines, deviceStyle.Render(core.DisplayName(s.DeviceName))+headerStyle.Render("  "+path))
 		}
 		lines = append(lines, sensorLine(s))
 	}

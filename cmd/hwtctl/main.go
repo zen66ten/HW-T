@@ -85,8 +85,8 @@ func runSensors(c *client.Client, args []string) {
 	for _, s := range sensors {
 		if s.Device != lastDev {
 			lastDev = s.Device
-			path := strings.TrimPrefix(s.Device, s.Provider+":")
-			fmt.Printf("%s  (%s)\n", s.DeviceName, path)
+			path := core.ShortenPath(strings.TrimPrefix(s.Device, s.Provider+":"), 50)
+			fmt.Printf("%s  (%s)\n", core.DisplayName(s.DeviceName), path)
 		}
 		if s.Err != "" {
 			fmt.Printf("  %-24s%12s\n", s.Label, "N/A")
@@ -115,7 +115,7 @@ func runDevices(c *client.Client, args []string) {
 		return
 	}
 	for _, d := range devices {
-		fmt.Printf("%s  [%s]\n", d.Name, d.ID)
+		fmt.Printf("%s  [%s]\n", core.DisplayName(d.Name), d.ID)
 		for _, k := range sortedKeys(d.Attrs) {
 			fmt.Printf("  %-16s %s\n", k, d.Attrs[k])
 		}
