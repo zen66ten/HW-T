@@ -169,9 +169,9 @@ func (u *ui) startSub(interval time.Duration) {
 			if ctx.Err() != nil {
 				return
 			}
-			msg := "disconnected — retrying"
+			msg := "disconnected, retrying"
 			if err != nil {
-				msg = fmt.Sprintf("disconnected (%v) — retrying", err)
+				msg = fmt.Sprintf("disconnected (%v), retrying", err)
 			}
 			fyne.Do(func() { u.status.SetText(msg) })
 			select {
@@ -262,7 +262,7 @@ func (u *ui) onSnapshot(sensors []client.Sensor) {
 			u.updateRow(row, s, firing[s.ID])
 		}
 		nAlerts := len(firing)
-		txt := fmt.Sprintf("%d sensors — connected", len(sensors))
+		txt := fmt.Sprintf("%d sensors, connected", len(sensors))
 		if nAlerts > 0 {
 			txt = fmt.Sprintf("⚠ %d alert(s)   %s", nAlerts, txt)
 		}

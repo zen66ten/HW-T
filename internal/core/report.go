@@ -136,7 +136,7 @@ func sortedAttrKeys(m map[string]string) []string {
 
 func renderText(r *Report) []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, "HW-T report — %s — host %s\n", r.Generated.Format(time.RFC3339), r.Host)
+	fmt.Fprintf(&b, "HW-T report, %s, host %s\n", r.Generated.Format(time.RFC3339), r.Host)
 
 	lastProvider := ""
 	for _, d := range r.Devices {
@@ -185,7 +185,7 @@ var htmlTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
 	"attrKeys": sortedAttrKeys,
 }).Parse(`<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>HW-T report — {{.Host}}</title>
+<title>HW-T report: {{.Host}}</title>
 <style>
 body { font: 14px/1.5 system-ui, sans-serif; background: #14161a; color: #d8dce2; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }
 h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; border-bottom: 1px solid #2a2e35; padding-bottom: .3rem; margin-top: 2rem; color: #7fb4e6; }

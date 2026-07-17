@@ -18,7 +18,7 @@ type valueBox struct {
 }
 
 func newValueBox() *valueBox {
-	v := &valueBox{text: "—"}
+	v := &valueBox{text: "-"}
 	v.ExtendBaseWidget(v)
 	return v
 }

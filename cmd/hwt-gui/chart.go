@@ -122,7 +122,7 @@ func (r *chartRenderer) Layout(size fyne.Size) {
 			l.Hidden = true
 		}
 		if label != "" {
-			r.title.Text = label + " — waiting for history"
+			r.title.Text = label + ", waiting for history"
 		}
 		r.cur.Text, r.lo.Text, r.hi.Text, r.span.Text = "", "", "", ""
 		return
