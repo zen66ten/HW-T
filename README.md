@@ -1,4 +1,5 @@
-# HW-T            ![hwt-gui sensors panel](docs/Untitled(1).jpg)
+# HW-T            
+![hwt-gui sensors panel](docs/Untitled(1)-modified.png)
 
 HWiNFO64-like hardware inventory and sensor monitoring suite for Linux.
 
