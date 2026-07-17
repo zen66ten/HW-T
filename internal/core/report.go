@@ -80,8 +80,9 @@ func assemble(devs []Device, sensors []Sensor, opts ReportOptions) *Report {
 
 	byDevice := map[DeviceID][]ReportSensor{}
 	for _, s := range sensors {
+		channel := strings.TrimPrefix(string(s.ID), string(s.Device)+":")
 		rs := ReportSensor{
-			Label: s.Label,
+			Label: EnrichLabel(s.DeviceName, channel, s.Label),
 			Cur:   s.Cur, Min: s.Min, Max: s.Max, Avg: s.Avg,
 			Err: s.Err,
 		}

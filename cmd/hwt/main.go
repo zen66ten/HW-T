@@ -171,7 +171,8 @@ func (m model) buildLines() []string {
 }
 
 func sensorLine(s client.Sensor) string {
-	label := fmt.Sprintf("  %-24s", s.Label)
+	enriched := core.EnrichLabel(s.DeviceName, strings.TrimPrefix(s.ID, s.Device+":"), s.Label)
+	label := fmt.Sprintf("  %-24s", enriched)
 	if s.Err != "" {
 		return label + errStyle.Render(fmt.Sprintf("%12s", "N/A"))
 	}

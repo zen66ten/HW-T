@@ -184,6 +184,53 @@ func (r *histBarRenderer) Layout(size fyne.Size) {
 	}
 }
 
+// tableRowLayout arranges the HWiNFO-style sensor row:
+// [name (flexible)] [current] [min] [max] [avg], numeric columns fixed.
+type tableRowLayout struct{}
+
+const (
+	tableColW = 92
+	tableRowH = 20
+)
+
+func (tableRowLayout) MinSize([]fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(200+4*tableColW, tableRowH)
+}
+
+func (tableRowLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	if len(objs) != 5 {
+		return
+	}
+	nameW := size.Width - 4*tableColW - 8
+	objs[0].Move(fyne.NewPos(8, 0))
+	objs[0].Resize(fyne.NewSize(nameW, size.Height))
+	for i := 1; i <= 4; i++ {
+		x := nameW + 8 + float32(i-1)*tableColW
+		objs[i].Move(fyne.NewPos(x, 0))
+		objs[i].Resize(fyne.NewSize(tableColW-8, size.Height))
+	}
+}
+
+// formCellLayout arranges one [label, value box] cell of the GPU-Z-style
+// info grid: label fixed width, box takes the rest.
+type formCellLayout struct{}
+
+const formLabelW = 118
+
+func (formCellLayout) MinSize([]fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(formLabelW+110, 22)
+}
+
+func (formCellLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	if len(objs) != 2 {
+		return
+	}
+	objs[0].Move(fyne.NewPos(0, 3))
+	objs[0].Resize(fyne.NewSize(formLabelW, size.Height-3))
+	objs[1].Move(fyne.NewPos(formLabelW+4, 1))
+	objs[1].Resize(fyne.NewSize(size.Width-formLabelW-6, size.Height-2))
+}
+
 // rowLayout arranges [name, value box, bar]: fixed name and value widths,
 // the bar takes the remainder.
 type rowLayout struct{}

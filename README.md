@@ -83,7 +83,7 @@ collectors cover:
 | Motherboard sensors | `nct6775`, `it87`, `asus-ec-sensors`, `asus-wmi-sensors`, `gigabyte-wmi` | depends on the board |
 | NVIDIA GPUs | `nvidia-smi` | temperature, power, clocks, load, VRAM, fan |
 | AMD GPUs | `amdgpu` | hotspot and memory temperatures, load, VRAM, clocks |
-| Intel GPUs | `i915` / `xe` | through `hwmon` |
+| Intel GPUs (Arc and integrated) | `i915` / `xe` DRM sysfs, plus `hwmon` on Arc | clocks for all; power and energy where the driver exposes them |
 | Drives | NVMe, `drivetemp`, `smartctl` | health and wear; never wakes a sleeping disk |
 | Memory | SMBIOS, `jc42` / `spd5118` sensors, EDAC | ECC error counters included |
 | Water cooling and PSUs | `corsair-psu`, `nzxt-*`, `aquacomputer_d5next` and other HID drivers | automatic |

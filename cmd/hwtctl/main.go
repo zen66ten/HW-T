@@ -100,12 +100,13 @@ func runSensors(c *client.Client, args []string) {
 			path := core.ShortenPath(strings.TrimPrefix(s.Device, s.Provider+":"), 50)
 			fmt.Printf("%s  (%s)\n", core.DisplayName(s.DeviceName), path)
 		}
+		label := core.EnrichLabel(s.DeviceName, strings.TrimPrefix(s.ID, s.Device+":"), s.Label)
 		if s.Err != "" {
-			fmt.Printf("  %-24s%12s\n", s.Label, "N/A")
+			fmt.Printf("  %-24s%12s\n", label, "N/A")
 			continue
 		}
 		kind := core.Kind(s.Kind)
-		fmt.Printf("  %-24s%12s%12s%12s%12s\n", s.Label,
+		fmt.Printf("  %-24s%12s%12s%12s%12s\n", label,
 			core.FormatValue(kind, s.Cur),
 			core.FormatValue(kind, s.Min),
 			core.FormatValue(kind, s.Max),

@@ -26,6 +26,7 @@ import (
 	"github.com/zen66ten/HW-T/internal/providers/edac"
 	"github.com/zen66ten/HW-T/internal/providers/edid"
 	"github.com/zen66ten/HW-T/internal/providers/hwmon"
+	"github.com/zen66ten/HW-T/internal/providers/intel"
 	"github.com/zen66ten/HW-T/internal/providers/nvidia"
 	"github.com/zen66ten/HW-T/internal/providers/pci"
 	"github.com/zen66ten/HW-T/internal/providers/rapl"
@@ -149,6 +150,7 @@ func run(configPath, socket, listen, sysfs string) error {
 		cpu.New(sysfs, fast),
 		rapl.New(sysfs, fast),
 		amdgpu.New(sysfs, fast),
+		intel.New(sysfs, fast),
 		nvidia.New(medium),
 		smart.New(sysfs, slow),
 		pci.New(sysfs, slow),

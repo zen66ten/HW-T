@@ -1,6 +1,10 @@
-// hwt-gui is the native desktop client (SPEC §8.2), styled after GPU-T:
-// dense sensor rows with rolling bar graphs, value boxes, and an inventory
-// browser. A plain client of the hwtd UDS API; the only binary needing CGO.
+// hwt-gui is the native desktop client (SPEC §8.2), modelled on HWiNFO's
+// multi-window layout. A main window carries the menu, toolbar and a
+// hardware navigation tree. Two independent child windows open from the
+// toolbar: System Summary (component frames at a glance) and Sensor Status
+// (every sensor with current/min/max/avg). Either child window can be
+// closed on its own while the main window stays open. A plain client of
+// the hwtd UDS API; the only binary needing CGO.
 package main
 
 import (
@@ -10,8 +14,6 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +21,6 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -33,49 +34,69 @@ func main() {
 
 	a := app.NewWithID("com.github.zen66ten.hwt")
 	a.Settings().SetTheme(&hwtTheme{p: pal})
-	w := a.NewWindow("HW-T")
-	w.Resize(fyne.NewSize(760, 780))
 
-	u := newUI(w, a, *socket)
-	w.SetContent(u.build())
-	// UI work must not start before the event loop does (fyne.Do contract).
+	u := newUI(a, *socket)
+	u.main = a.NewWindow("HW-T")
+	u.main.Resize(fyne.NewSize(680, 560))
+	u.main.SetContent(u.buildMain())
+	u.main.SetMainMenu(u.mainMenu())
+
+	u.main.SetOnClosed(func() { u.stopSub() })
 	a.Lifecycle().SetOnStarted(func() {
 		go u.startSub(time.Second)
 		go u.fetchDevices()
+		// Open both child windows by default, HWiNFO style.
+		fyne.Do(func() {
+			u.openSummary()
+			u.openSensors()
+			u.main.RequestFocus()
+		})
 	})
 
-	w.ShowAndRun()
-	u.stopSub()
+	u.main.ShowAndRun()
 }
 
-// sensorRow is one live row: name, value box, rolling bars.
+// sensorRow is one line in the Sensor Status table.
 type sensorRow struct {
-	name  *canvas.Text
-	value *valueBox
-	bar   *histBar
-	kind  core.Kind
+	name, cur, min, max, avg *canvas.Text
+	kind                     core.Kind
+}
+
+// summaryRow is one live line in a System Summary frame.
+type summaryRow struct {
+	box    *valueBox
+	render func(snap map[string]client.Sensor) string
 }
 
 type ui struct {
-	win    fyne.Window
 	app    fyne.App
+	main   fyne.Window
 	socket string
 
 	mu        sync.Mutex
-	signature string // sensor-ID set fingerprint; change triggers rebuild
-	rows      map[string]*sensorRow
+	signature string
 	devices   []client.Device
-	selected  string // sensor for the big chart
+	sensors   []client.Sensor
 	firing    map[string]bool
+	selected  string
 
-	list      *container.Scroll
-	chart     *chart
-	status    *widget.Label
-	invSelect *widget.Select
-	invForm   *fyne.Container
-	invByName map[string]int // dropdown label -> devices index
+	// main-window navigation
+	tree     *widget.Tree
+	detail   *fyne.Container
+	mainStat *widget.Label
 
-	subMu     sync.Mutex // serializes startSub/stopSub (rate changes)
+	// System Summary child window
+	summaryWin  fyne.Window
+	summaryBody *fyne.Container
+	summaryRows []summaryRow
+
+	// Sensor Status child window
+	sensorWin  fyne.Window
+	sensorBody *fyne.Container
+	rows       map[string]*sensorRow
+	chart      *chart
+
+	subMu     sync.Mutex
 	subCancel context.CancelFunc
 	subWG     sync.WaitGroup
 
@@ -83,77 +104,163 @@ type ui struct {
 	rpc   *client.Client
 }
 
-func newUI(win fyne.Window, a fyne.App, socket string) *ui {
+func newUI(a fyne.App, socket string) *ui {
 	return &ui{
-		win: win, app: a, socket: socket,
-		rows:   map[string]*sensorRow{},
+		app: a, socket: socket,
 		firing: map[string]bool{},
+		rows:   map[string]*sensorRow{},
 	}
 }
 
-func (u *ui) build() fyne.CanvasObject {
-	u.status = widget.NewLabel("connecting…")
-	u.chart = newChart()
-	u.list = container.NewVScroll(container.NewVBox())
+// --- main window ---
 
-	sensorsTab := container.NewBorder(nil,
-		container.NewVBox(widget.NewSeparator(), u.chart), nil, nil, u.list)
+func (u *ui) buildMain() fyne.CanvasObject {
+	u.mainStat = widget.NewLabel("connecting…")
 
-	u.invForm = container.New(layout.NewFormLayout())
-	u.invSelect = widget.NewSelect(nil, u.showDevice)
-	u.invSelect.PlaceHolder = "select device"
-	refreshBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() { go u.fetchDevices() })
-	inventoryTab := container.NewBorder(
-		container.NewBorder(nil, nil, nil, refreshBtn, u.invSelect),
-		nil, nil, nil,
-		container.NewVScroll(u.invForm))
+	summaryBtn := widget.NewButtonWithIcon("Summary", theme.ListIcon(), u.openSummary)
+	sensorsBtn := widget.NewButtonWithIcon("Sensors", theme.ComputerIcon(), u.openSensors)
+	reportBtn := widget.NewButtonWithIcon("Save Report", theme.DocumentSaveIcon(), u.saveReport)
+	toolbar := container.NewHBox(summaryBtn, sensorsBtn, reportBtn)
 
-	tabs := container.NewAppTabs(
-		container.NewTabItem("Sensors", sensorsTab),
-		container.NewTabItem("Inventory", inventoryTab),
+	u.tree = widget.NewTree(u.treeChildren, u.treeIsBranch, u.treeCreate, u.treeUpdate)
+	u.tree.OnSelected = u.treeSelected
+	u.detail = container.NewVBox(widget.NewLabel("select a device on the left"))
+
+	split := container.NewHSplit(u.tree, container.NewVScroll(u.detail))
+	split.SetOffset(0.42)
+
+	return container.NewBorder(
+		container.NewVBox(toolbar, widget.NewSeparator()),
+		container.NewVBox(widget.NewSeparator(), u.mainStat),
+		nil, nil, split)
+}
+
+func (u *ui) mainMenu() *fyne.MainMenu {
+	return fyne.NewMainMenu(
+		fyne.NewMenu("Program",
+			fyne.NewMenuItem("Refresh", func() { go u.fetchDevices() }),
+			fyne.NewMenuItem("Quit", func() { u.app.Quit() }),
+		),
+		fyne.NewMenu("Monitoring",
+			fyne.NewMenuItem("System Summary", u.openSummary),
+			fyne.NewMenuItem("Sensor Status", u.openSensors),
+		),
+		fyne.NewMenu("Report",
+			fyne.NewMenuItem("Save Report…", u.saveReport),
+		),
+		fyne.NewMenu("View",
+			fyne.NewMenuItem("Toggle Light/Dark", u.toggleTheme),
+		),
 	)
+}
+
+func (u *ui) toggleTheme() {
+	if pal == &palLight {
+		pal = &palDark
+	} else {
+		pal = &palLight
+	}
+	u.app.Settings().SetTheme(&hwtTheme{p: pal})
+	u.mu.Lock()
+	u.signature = "" // force every open window to rebuild next tick
+	u.mu.Unlock()
+}
+
+// --- System Summary child window ---
+
+func (u *ui) openSummary() {
+	if u.summaryWin != nil {
+		u.summaryWin.RequestFocus()
+		return
+	}
+	w := u.app.NewWindow("System Summary")
+	w.Resize(fyne.NewSize(1180, 560))
+	u.summaryBody = container.NewStack(widget.NewLabel("waiting for data…"))
+	w.SetContent(u.summaryBody)
+	w.SetOnClosed(func() {
+		u.mu.Lock()
+		u.summaryWin = nil
+		u.summaryBody = nil
+		u.summaryRows = nil
+		u.mu.Unlock()
+	})
+	u.summaryWin = w
+
+	u.mu.Lock()
+	sensors := u.sensors
+	u.mu.Unlock()
+	u.rebuildSummary(sensors)
+	w.Show()
+}
+
+// --- Sensor Status child window ---
+
+func (u *ui) openSensors() {
+	if u.sensorWin != nil {
+		u.sensorWin.RequestFocus()
+		return
+	}
+	w := u.app.NewWindow("Sensor Status")
+	w.Resize(fyne.NewSize(620, 700))
+	u.chart = newChart()
 
 	logCheck := widget.NewCheck("Log to file", func(on bool) { go u.toggleLog(on) })
 	rate := widget.NewSelect([]string{"0.5 s", "1.0 s", "2.0 s", "5.0 s"}, func(s string) {
 		d := map[string]time.Duration{
-			"0.5 s": 500 * time.Millisecond,
-			"1.0 s": time.Second,
-			"2.0 s": 2 * time.Second,
-			"5.0 s": 5 * time.Second,
+			"0.5 s": 500 * time.Millisecond, "1.0 s": time.Second,
+			"2.0 s": 2 * time.Second, "5.0 s": 5 * time.Second,
 		}[s]
-		// Off the UI thread: stopSub waits for the subscription goroutine,
-		// which may itself be waiting on fyne.Do — blocking here would
-		// deadlock the event loop.
 		go u.startSub(d)
 	})
 	rate.SetSelectedIndex(1)
 	resetBtn := widget.NewButton("Reset", func() {
 		go u.withRPC(func(c *client.Client) error { return c.Reset("") })
 	})
-	themeBtn := widget.NewButtonWithIcon("", theme.ColorPaletteIcon(), nil)
-	themeBtn.OnTapped = func() {
-		if pal == &palLight {
-			pal = &palDark
-		} else {
-			pal = &palLight
-		}
-		u.app.Settings().SetTheme(&hwtTheme{p: pal})
+	controls := container.NewHBox(logCheck, widget.NewLabel("  rate"), rate, resetBtn)
+
+	u.sensorBody = container.NewStack(widget.NewLabel("waiting for data…"))
+	content := container.NewBorder(nil,
+		container.NewVBox(widget.NewSeparator(), u.chart, controls),
+		nil, nil, u.sensorBody)
+	w.SetContent(content)
+	w.SetOnClosed(func() {
 		u.mu.Lock()
-		u.signature = "" // force row rebuild with the new palette next tick
+		u.sensorWin = nil
+		u.sensorBody = nil
+		u.rows = map[string]*sensorRow{}
+		u.chart = nil
 		u.mu.Unlock()
-		if sel := u.invSelect.Selected; sel != "" {
-			u.showDevice(sel)
-		}
-	}
+	})
+	u.sensorWin = w
 
-	bottom := container.NewBorder(widget.NewSeparator(), nil,
-		container.NewHBox(logCheck, widget.NewLabel("  rate"), rate, resetBtn, themeBtn),
-		nil, container.NewHBox(layout.NewSpacer(), u.status))
-
-	return container.NewBorder(nil, bottom, nil, nil, tabs)
+	u.mu.Lock()
+	sensors := u.sensors
+	u.mu.Unlock()
+	u.rebuildSensors(sensors)
+	w.Show()
 }
 
-// --- subscription management (restartable for the rate selector) ---
+func (u *ui) saveReport() {
+	var report string
+	err := u.withRPC(func(c *client.Client) error {
+		var e error
+		report, e = c.Report("html", nil, false)
+		return e
+	})
+	if err != nil {
+		u.mainStat.SetText("report failed: " + err.Error())
+		return
+	}
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, "hwt-report.html")
+	if err := os.WriteFile(path, []byte(report), 0o644); err != nil {
+		u.mainStat.SetText("report failed: " + err.Error())
+		return
+	}
+	u.mainStat.SetText("report saved to " + path)
+}
+
+// --- subscription ---
 
 func (u *ui) startSub(interval time.Duration) {
 	u.subMu.Lock()
@@ -173,7 +280,7 @@ func (u *ui) startSub(interval time.Duration) {
 			if err != nil {
 				msg = fmt.Sprintf("disconnected (%v), retrying", err)
 			}
-			fyne.Do(func() { u.status.SetText(msg) })
+			fyne.Do(func() { u.mainStat.SetText(msg) })
 			select {
 			case <-ctx.Done():
 				return
@@ -218,15 +325,13 @@ func (u *ui) withRPC(fn func(*client.Client) error) error {
 	return fmt.Errorf("rpc failed after reconnect")
 }
 
-// --- sensors view ---
-
 func snapshotSignature(sensors []client.Sensor) string {
-	var b strings.Builder
+	var b []byte
 	for _, s := range sensors {
-		b.WriteString(s.ID)
-		b.WriteByte('\n')
+		b = append(b, s.ID...)
+		b = append(b, '\n')
 	}
-	return b.String()
+	return string(b)
 }
 
 func (u *ui) onSnapshot(sensors []client.Sensor) {
@@ -243,99 +348,96 @@ func (u *ui) onSnapshot(sensors []client.Sensor) {
 		}
 	}
 
+	u.mu.Lock()
+	devicesReady := len(u.devices) > 0
+	u.mu.Unlock()
+	if !devicesReady {
+		u.fetchDevices()
+	}
+
 	sig := snapshotSignature(sensors)
+	snap := make(map[string]client.Sensor, len(sensors))
+	for _, s := range sensors {
+		snap[s.ID] = s
+	}
+
 	fyne.Do(func() {
 		u.mu.Lock()
 		rebuild := sig != u.signature
 		u.signature = sig
 		u.firing = firing
+		u.sensors = sensors
+		summaryOpen := u.summaryWin != nil
+		sensorOpen := u.sensorWin != nil
 		u.mu.Unlock()
 
 		if rebuild {
-			u.rebuildRows(sensors)
-		}
-		for _, s := range sensors {
-			row, ok := u.rows[s.ID]
-			if !ok {
-				continue
+			if summaryOpen {
+				u.rebuildSummary(sensors)
 			}
-			u.updateRow(row, s, firing[s.ID])
+			if sensorOpen {
+				u.rebuildSensors(sensors)
+			}
+			if u.tree != nil {
+				u.tree.Refresh()
+			}
 		}
-		nAlerts := len(firing)
+		if sensorOpen {
+			for _, s := range sensors {
+				if row, ok := u.rows[s.ID]; ok {
+					u.updateRow(row, s, firing[s.ID])
+				}
+			}
+		}
+		if summaryOpen {
+			for _, sr := range u.summaryRows {
+				sr.box.Set(sr.render(snap), nil)
+			}
+		}
+
 		txt := fmt.Sprintf("%d sensors, connected", len(sensors))
-		if nAlerts > 0 {
-			txt = fmt.Sprintf("⚠ %d alert(s)   %s", nAlerts, txt)
+		if len(firing) > 0 {
+			txt = fmt.Sprintf("⚠ %d alert(s)   %s", len(firing), txt)
 		}
-		u.status.SetText(txt)
+		u.mainStat.SetText(txt)
 	})
 	u.refreshChart()
 }
 
-func (u *ui) rebuildRows(sensors []client.Sensor) {
-	box := container.NewVBox()
-	u.rows = map[string]*sensorRow{}
-	lastDev := ""
-	for _, s := range sensors {
-		if s.Device != lastDev {
-			lastDev = s.Device
-			hdr := canvas.NewText(core.DisplayName(s.DeviceName), pal.accent)
-			hdr.TextStyle.Bold = true
-			hdr.TextSize = 13
-			box.Add(container.NewPadded(hdr))
-		}
-		name := canvas.NewText(s.Label, pal.dim)
-		name.TextSize = 12
-		row := &sensorRow{name: name, value: newValueBox(), bar: newHistBar(), kind: core.Kind(s.Kind)}
-		u.rows[s.ID] = row
-
-		id := s.ID
-		content := container.New(rowLayout{}, name, row.value, row.bar)
-		box.Add(newTappableRow(content, func() {
-			u.mu.Lock()
-			u.selected = id
-			u.mu.Unlock()
-			go u.refreshChart()
-		}))
-	}
-	u.list.Content = box
-	u.list.Refresh()
-}
-
 func (u *ui) updateRow(row *sensorRow, s client.Sensor, firing bool) {
+	set := func(t *canvas.Text, txt string, col color.Color) {
+		t.Text, t.Color = txt, col
+		t.Refresh()
+	}
 	if s.Err != "" {
-		row.value.Set("N/A", pal.dim)
+		set(row.cur, "N/A", pal.dim)
+		set(row.min, "", pal.dim)
+		set(row.max, "", pal.dim)
+		set(row.avg, "", pal.dim)
 		return
 	}
-	var col color.Color // nil = normal foreground
-	switch {
-	case firing:
-		col = pal.crit
-	case row.kind == core.KindTemp:
+	curCol := color.Color(pal.foreground)
+	if firing {
+		curCol = pal.crit
+	} else if row.kind == core.KindTemp {
 		if crit, ok := s.Limits["crit"]; ok && s.Cur >= crit {
-			col = pal.crit
+			curCol = pal.crit
 		} else if high, ok := s.Limits["max"]; ok && s.Cur >= high {
-			col = pal.warn
+			curCol = pal.warn
 		}
 	}
-	row.value.Set(core.FormatValue(row.kind, s.Cur), col)
-	row.bar.Push(s.Cur)
-
-	nameCol := color.Color(pal.dim)
-	if firing {
-		nameCol = pal.crit
-	}
-	if row.name.Color != nameCol {
-		row.name.Color = nameCol
-		row.name.Refresh()
-	}
+	set(row.cur, core.FormatValue(row.kind, s.Cur), curCol)
+	set(row.min, core.FormatValue(row.kind, s.Min), pal.dim)
+	set(row.max, core.FormatValue(row.kind, s.Max), pal.dim)
+	set(row.avg, core.FormatValue(row.kind, s.Avg), pal.dim)
 }
 
 func (u *ui) refreshChart() {
 	u.mu.Lock()
-	id := u.selected
+	id, ch := u.selected, u.chart
 	row := u.rows[id]
 	u.mu.Unlock()
-	if id == "" || row == nil {
+	if id == "" || row == nil || ch == nil {
 		return
 	}
 	var pts []client.Point
@@ -346,12 +448,9 @@ func (u *ui) refreshChart() {
 	}); err != nil {
 		return
 	}
-	label := row.name.Text
-	kind := row.kind
-	fyne.Do(func() { u.chart.SetSeries(label, kind, pts) })
+	label, kind := row.name.Text, row.kind
+	fyne.Do(func() { ch.SetSeries(label, kind, pts) })
 }
-
-// --- inventory view ---
 
 func (u *ui) fetchDevices() {
 	var devs []client.Device
@@ -362,69 +461,11 @@ func (u *ui) fetchDevices() {
 	}); err != nil {
 		return
 	}
-
-	byName := map[string]int{}
-	names := make([]string, 0, len(devs))
-	for i, d := range devs {
-		label := fmt.Sprintf("%s  [%s]", core.DisplayName(d.Name), d.Provider)
-		for dup := 2; ; dup++ {
-			if _, taken := byName[label]; !taken {
-				break
-			}
-			label = fmt.Sprintf("%s  [%s #%d]", core.DisplayName(d.Name), d.Provider, dup)
-		}
-		byName[label] = i
-		names = append(names, label)
-	}
-
-	fyne.Do(func() {
-		u.mu.Lock()
-		u.devices = devs
-		u.invByName = byName
-		u.mu.Unlock()
-		sel := u.invSelect.Selected
-		u.invSelect.SetOptions(names)
-		if sel == "" && len(names) > 0 {
-			u.invSelect.SetSelected(names[0])
-		}
-	})
-}
-
-func (u *ui) showDevice(label string) {
 	u.mu.Lock()
-	idx, ok := u.invByName[label]
-	var dev client.Device
-	if ok && idx < len(u.devices) {
-		dev = u.devices[idx]
-	}
+	u.devices = devs
+	u.signature = ""
 	u.mu.Unlock()
-	if !ok {
-		return
-	}
-
-	u.invForm.RemoveAll()
-	add := func(k, v string) {
-		lbl := canvas.NewText(k, pal.dim)
-		lbl.TextSize = 12
-		lbl.Alignment = fyne.TextAlignTrailing
-		vb := newValueBox()
-		vb.Set(v, nil)
-		u.invForm.Add(lbl)
-		u.invForm.Add(vb)
-	}
-	add("device id", dev.ID)
-	keys := make([]string, 0, len(dev.Attrs))
-	for k := range dev.Attrs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		add(k, dev.Attrs[k])
-	}
-	u.invForm.Refresh()
 }
-
-// --- logging control ---
 
 func (u *ui) toggleLog(on bool) {
 	if !on {
@@ -441,5 +482,5 @@ func (u *ui) toggleLog(on bool) {
 	if err != nil {
 		msg = "log start failed: " + err.Error()
 	}
-	fyne.Do(func() { u.status.SetText(msg) })
+	fyne.Do(func() { u.mainStat.SetText(msg) })
 }
