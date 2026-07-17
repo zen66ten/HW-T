@@ -19,10 +19,14 @@ threshold alerts.
 - `hwtd` — monitoring daemon: discovers hardware, polls sensors in
   fast/medium/slow groups, tracks min/max/avg and history, evaluates
   alerts, drives the sensor log, serves all APIs
+- `hwt-gui` — native desktop app (GPU-Z-style sensor rows with rolling
+  bar graphs, click-to-graph history, inventory browser, light/dark)
 - `hwt` — live TUI sensors panel (current/min/max/avg per sensor, grouped
   by chip)
 - `hwtctl` — scripting CLI (query, JSON output, stats reset, history,
-  log control, alert state)
+  log control, alert state, report export)
+
+![hwt-gui sensors panel](docs/screenshot-light.png)
 
 Sensor identities are derived from stable device topology
 (`hwmon:pci-0000:00:18.3:temp1`), never from kernel enumeration order, so
@@ -34,6 +38,20 @@ Requires Go 1.24+.
 
 ```
 go build ./cmd/hwtd ./cmd/hwt ./cmd/hwtctl
+```
+
+The GUI needs CGO and OpenGL/X11/Wayland headers (all other binaries are
+pure-Go, CGO_ENABLED=0):
+
+```
+# Fedora
+sudo dnf install gcc mesa-libGL-devel libX11-devel libXcursor-devel \
+  libXrandr-devel libXinerama-devel libXi-devel libXxf86vm-devel \
+  wayland-devel libxkbcommon-devel wayland-protocols-devel
+# Debian/Ubuntu
+sudo apt install gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+
+go build ./cmd/hwt-gui
 ```
 
 ## Running

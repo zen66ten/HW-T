@@ -6,6 +6,7 @@ CLAUDE.md
 /hwt
 /hwtd
 /hwtctl
+/hwt-gui
 dist/
 build/
 
