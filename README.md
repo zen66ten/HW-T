@@ -51,10 +51,21 @@ Then, in another terminal:
 ./hwt                        # live TUI: q quit, r reset stats, ↑/↓ scroll
 ./hwtctl sensors             # one-shot table
 ./hwtctl sensors -json       # machine-readable
-./hwtctl devices             # inventory incl. DMI (BIOS, board, RAM)
+./hwtctl devices             # full inventory: DMI, PCI, USB, monitors, drives
 ./hwtctl history -id <id>    # buffered samples for one sensor
 ./hwtctl alerts              # state of configured alert rules
 curl localhost:11988/metrics # Prometheus/OpenMetrics
+```
+
+### Reports
+
+Export the full inventory + sensor state (HWiNFO report parity), in five
+formats. `-redact` blanks serials/UUIDs/MACs so reports are safe to share:
+
+```
+./hwtctl report -format html -redact -o report.html
+./hwtctl report -format text -section pci,usb
+./hwtctl report -format json | jq .
 ```
 
 Point Prometheus at `localhost:11988` and graph `hwt_temp_celsius`,
@@ -103,4 +114,4 @@ go test ./...
 
 ## License
 
-_License to be decided._
+MIT — see [LICENSE](LICENSE).

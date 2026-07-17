@@ -72,6 +72,8 @@ type request struct {
 	Format     string   `json:"format,omitempty"`
 	Note       string   `json:"note,omitempty"`
 	Sensors    []string `json:"sensors,omitempty"`
+	Sections   []string `json:"sections,omitempty"`
+	Redact     bool     `json:"redact,omitempty"`
 }
 
 type response struct {
@@ -84,6 +86,7 @@ type response struct {
 	Quarantined map[string]string `json:"quarantined,omitempty"`
 	Alerts      []AlertStatus     `json:"alerts,omitempty"`
 	Log         *LogStatus        `json:"log,omitempty"`
+	Report      string            `json:"report,omitempty"`
 }
 
 // DefaultSocket returns the conventional socket path: /run/hwtd.sock when it
@@ -212,6 +215,17 @@ func (c *Client) LogStatus() (*LogStatus, error) {
 		return nil, err
 	}
 	return resp.Log, nil
+}
+
+// Report renders the inventory+sensors report in the given format
+// (text, html, json, yaml, csv). sections filters by provider; redact
+// blanks serials, UUIDs and MACs.
+func (c *Client) Report(format string, sections []string, redact bool) (string, error) {
+	resp, err := c.roundTrip(request{Op: "report", Format: format, Sections: sections, Redact: redact})
+	if err != nil {
+		return "", err
+	}
+	return resp.Report, nil
 }
 
 // Subscribe opens a dedicated connection and invokes fn with each snapshot

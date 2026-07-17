@@ -23,10 +23,14 @@ import (
 	"github.com/zen66ten/HW-T/internal/providers/amdgpu"
 	"github.com/zen66ten/HW-T/internal/providers/cpu"
 	"github.com/zen66ten/HW-T/internal/providers/dmi"
+	"github.com/zen66ten/HW-T/internal/providers/edac"
+	"github.com/zen66ten/HW-T/internal/providers/edid"
 	"github.com/zen66ten/HW-T/internal/providers/hwmon"
 	"github.com/zen66ten/HW-T/internal/providers/nvidia"
+	"github.com/zen66ten/HW-T/internal/providers/pci"
 	"github.com/zen66ten/HW-T/internal/providers/rapl"
 	"github.com/zen66ten/HW-T/internal/providers/smart"
+	"github.com/zen66ten/HW-T/internal/providers/usb"
 )
 
 type alertConfig struct {
@@ -147,7 +151,11 @@ func run(configPath, socket, listen, sysfs string) error {
 		amdgpu.New(sysfs, fast),
 		nvidia.New(medium),
 		smart.New(sysfs, slow),
+		pci.New(sysfs, slow),
+		edac.New(sysfs, slow),
 		dmi.New(sysfs),
+		usb.New(sysfs),
+		edid.New(sysfs),
 	)
 	sched.Start(ctx)
 

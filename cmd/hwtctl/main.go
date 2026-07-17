@@ -25,6 +25,7 @@ commands:
   log stop
   log mark <note>         attach a note to the next logged row
   log status
+  report [-format text|html|json|yaml|csv] [-section pci,usb,...] [-redact] [-o file]
 `
 
 func main() {
@@ -58,6 +59,8 @@ func main() {
 		runAlerts(c, rest)
 	case "log":
 		runLog(c, rest)
+	case "report":
+		runReport(c, rest)
 	default:
 		flag.Usage()
 		os.Exit(2)
@@ -152,6 +155,32 @@ func runHistory(c *client.Client, args []string) {
 		fatal(err)
 	}
 	printJSON(points)
+}
+
+func runReport(c *client.Client, args []string) {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	format := fs.String("format", "text", "text, html, json, yaml, or csv")
+	sections := fs.String("section", "", "comma-separated provider filter (e.g. pci,usb,dmi)")
+	redact := fs.Bool("redact", false, "hide serials, UUIDs and MACs")
+	out := fs.String("o", "", "write to file instead of stdout")
+	fs.Parse(args)
+
+	var secs []string
+	if *sections != "" {
+		secs = strings.Split(*sections, ",")
+	}
+	report, err := c.Report(*format, secs, *redact)
+	if err != nil {
+		fatal(err)
+	}
+	if *out == "" {
+		fmt.Print(report)
+		return
+	}
+	if err := os.WriteFile(*out, []byte(report), 0o644); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("report written to %s (%d bytes)\n", *out, len(report))
 }
 
 func runReset(c *client.Client, args []string) {

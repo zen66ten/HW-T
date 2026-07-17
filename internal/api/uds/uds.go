@@ -21,13 +21,15 @@ import (
 
 // Request is one client command.
 type Request struct {
-	Op         string   `json:"op"` // sensors | devices | history | reset | subscribe | alerts | log_start | log_stop | log_mark | log_status
+	Op         string   `json:"op"` // sensors | devices | history | reset | subscribe | alerts | log_start | log_stop | log_mark | log_status | report
 	ID         string   `json:"id,omitempty"`
 	IntervalMs int      `json:"interval_ms,omitempty"`
-	Path       string   `json:"path,omitempty"`    // log_start
-	Format     string   `json:"format,omitempty"`  // log_start: csv | ndjson
-	Note       string   `json:"note,omitempty"`    // log_mark
-	Sensors    []string `json:"sensors,omitempty"` // log_start: column subset
+	Path       string   `json:"path,omitempty"`     // log_start
+	Format     string   `json:"format,omitempty"`   // log_start: csv | ndjson; report: text | html | json | yaml | csv
+	Note       string   `json:"note,omitempty"`     // log_mark
+	Sensors    []string `json:"sensors,omitempty"`  // log_start: column subset
+	Sections   []string `json:"sections,omitempty"` // report: provider filter
+	Redact     bool     `json:"redact,omitempty"`   // report: hide serials/UUIDs/MACs
 }
 
 // LogStatus reports the logging state.
@@ -48,6 +50,7 @@ type Response struct {
 	Quarantined map[string]string  `json:"quarantined,omitempty"`
 	Alerts      []core.AlertStatus `json:"alerts,omitempty"`
 	Log         *LogStatus         `json:"log,omitempty"`
+	Report      string             `json:"report,omitempty"`
 }
 
 // Server answers requests from the registry. Logger and Alerts are
@@ -188,6 +191,16 @@ func (s *Server) respond(req Request) Response {
 			return Response{OK: true, Log: &LogStatus{}}
 		}
 		return Response{OK: true, Log: s.logStatus()}
+	case "report":
+		out, err := core.BuildReport(s.reg.Devices(), s.reg.Snapshot(), core.ReportOptions{
+			Format:   req.Format,
+			Sections: req.Sections,
+			Redact:   req.Redact,
+		})
+		if err != nil {
+			return Response{Error: err.Error()}
+		}
+		return Response{OK: true, Report: string(out)}
 	default:
 		return Response{Error: "unknown op: " + req.Op}
 	}
