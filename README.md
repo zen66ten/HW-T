@@ -1,16 +1,19 @@
 # HW-T
 
-A HWiNFO64-class hardware inventory and sensor monitoring suite for Linux.
+HWiNFO64-like hardware inventory and sensor monitoring suite for Linux.
 
 ## Overview
 
-HW-T is a hardware monitoring suite for Linux that combines deep hardware
-inventory with real-time sensor monitoring. It aggregates data from kernel
-interfaces and vendor tools — `hwmon`, cpufreq, effective per-core clocks
-(APERF/MPERF via perf), RAPL package/core power, NVIDIA GPUs (nvidia-smi),
-AMD GPUs (DRM sysfs), drive SMART health (smartctl), DMI/SMBIOS — and
-serves it through a TUI, a scripting CLI, a Unix-socket API, and Prometheus
-metrics, with CSV/NDJSON logging and threshold alerts.
+HW-T is a hardware monitoring combo tool for Linux that combines hardware
+inventory with real-time sensor readings. I built it because the lack of a
+HWiNFO64 equivalent on Linux always annoyed me — the pieces are scattered
+across a dozen utilities, and no single tool covers all of its functions.
+It aggregates data from kernel interfaces and vendor tools: hwmon, cpufreq,
+effective per-core clocks (APERF/MPERF via perf), RAPL package/core power,
+NVIDIA GPUs (nvidia-smi), AMD GPUs (DRM sysfs), drive SMART health
+(smartctl), DMI/SMBIOS — and serves it through a TUI, a one-shot CLI, a
+Unix-socket API, and Prometheus metrics, with CSV/NDJSON logging and
+threshold alerts.
 
 **Components:**
 - `hwtd` — monitoring daemon: discovers hardware, polls sensors in
