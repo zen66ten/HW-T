@@ -26,7 +26,7 @@ threshold alerts.
 - `hwtctl` — scripting CLI (query, JSON output, stats reset, history,
   log control, alert state, report export)
 
-![hwt-gui sensors panel](docs/screenshot-light.png)
+![hwt-gui sensors panel](docs/Untitled(1).jpg)
 
 Sensor identities are derived from stable device topology
 (`hwmon:pci-0000:00:18.3:temp1`), never from kernel enumeration order, so
