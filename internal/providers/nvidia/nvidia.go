@@ -30,6 +30,10 @@ var queryFields = []string{
 	"memory.used",
 	"memory.total",
 	"fan.speed",
+	"driver_version",
+	"vbios_version",
+	"pcie.link.gen.current",
+	"pcie.link.width.current",
 }
 
 // GPU is one parsed nvidia-smi CSV row. Value fields are pointers: nil
@@ -52,6 +56,12 @@ type GPU struct {
 	MemUsedMiB  *float64
 	MemTotalMiB *float64
 	FanPercent  *float64
+
+	// Identity strings (empty when the driver reports "[N/A]").
+	DriverVersion string
+	VBIOSVersion  string
+	PCIeGen       string
+	PCIeWidth     string
 }
 
 // ParseCSV decodes `nvidia-smi --query-gpu=... --format=csv,noheader,nounits`
@@ -82,9 +92,22 @@ func ParseCSV(out string) ([]GPU, error) {
 		g.MemUsedMiB = num(fields[11])
 		g.MemTotalMiB = num(fields[12])
 		g.FanPercent = num(fields[13])
+		g.DriverVersion = str(fields[14])
+		g.VBIOSVersion = str(fields[15])
+		g.PCIeGen = str(fields[16])
+		g.PCIeWidth = str(fields[17])
 		gpus = append(gpus, g)
 	}
 	return gpus, nil
+}
+
+// str trims one CSV value, returning "" for the driver's "[N/A]" markers.
+func str(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.HasPrefix(s, "[") || s == "N/A" {
+		return ""
+	}
+	return s
 }
 
 // num parses one CSV value; "[N/A]", "[Not Supported]" and similar

@@ -48,9 +48,13 @@ controllers, or CPU registers.
   the device tree, such as `hwmon:pci-0000:00:18.3:temp1`, never by
   kernel enumeration order. Settings and history survive reboots and
   kernel updates.
-- **Hardware inventory.** BIOS, motherboard and memory details from
-  SMBIOS, the full PCI bus with proper device names, USB devices,
-  connected monitors, drive identities, and ECC memory controllers.
+- **Hardware inventory.** CPU identity (model, family and stepping,
+  microcode, L1/L2/L3 cache, instruction sets, security mitigations),
+  operating system and platform (distribution, kernel, UEFI and Secure
+  Boot state, TPM, total memory), BIOS, motherboard and memory details
+  from SMBIOS, the full PCI bus with proper device names, USB devices,
+  connected monitors, drive identity and capacity, and ECC memory
+  controllers.
 - **Alerts.** A rule fires when a value stays above or below a threshold
   for a set time, with hysteresis so it does not flap. Actions include
   desktop notifications, journal entries, shell hooks and webhooks.

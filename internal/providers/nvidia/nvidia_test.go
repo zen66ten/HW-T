@@ -2,8 +2,8 @@ package nvidia
 
 import "testing"
 
-const sampleCSV = `GPU-30c237fa-265a-9c1e-12c9-ef20c33b877d, NVIDIA GeForce RTX 3080 Ti, 51, 97.70, 350.00, 540, 540, 5001, 1005, 38, 10, 2504, 12288, 62
-GPU-aaaabbbb-cccc-dddd-eeee-ffff00001111, NVIDIA T400, 40, [N/A], 31.00, 420, 420, 5001, 780, 0, 0, 128, 2048, [N/A]`
+const sampleCSV = `GPU-30c237fa-265a-9c1e-12c9-ef20c33b877d, NVIDIA GeForce RTX 3080 Ti, 51, 97.70, 350.00, 540, 540, 5001, 1005, 38, 10, 2504, 12288, 62, 590.48, 94.02.42.C0.66, 4, 16
+GPU-aaaabbbb-cccc-dddd-eeee-ffff00001111, NVIDIA T400, 40, [N/A], 31.00, 420, 420, 5001, 780, 0, 0, 128, 2048, [N/A], 590.48, [N/A], 1, 4`
 
 func TestParseCSV(t *testing.T) {
 	gpus, err := ParseCSV(sampleCSV)
@@ -51,6 +51,15 @@ func TestParseCSV(t *testing.T) {
 	}
 	if g2.TempC == nil || *g2.TempC != 40 {
 		t.Errorf("TempC = %v, want 40", g2.TempC)
+	}
+
+	// Identity strings and PCIe link on GPU 0.
+	if g.DriverVersion != "590.48" || g.PCIeGen != "4" || g.PCIeWidth != "16" {
+		t.Errorf("identity = %q gen=%q width=%q", g.DriverVersion, g.PCIeGen, g.PCIeWidth)
+	}
+	// GPU 1 reports [N/A] vbios; must be empty, not the literal marker.
+	if g2.VBIOSVersion != "" {
+		t.Errorf("VBIOS = %q, want empty for [N/A]", g2.VBIOSVersion)
 	}
 }
 

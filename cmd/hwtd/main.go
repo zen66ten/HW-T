@@ -22,6 +22,7 @@ import (
 	"github.com/zen66ten/HW-T/internal/core"
 	"github.com/zen66ten/HW-T/internal/providers/amdgpu"
 	"github.com/zen66ten/HW-T/internal/providers/cpu"
+	"github.com/zen66ten/HW-T/internal/providers/cpuinfo"
 	"github.com/zen66ten/HW-T/internal/providers/dmi"
 	"github.com/zen66ten/HW-T/internal/providers/edac"
 	"github.com/zen66ten/HW-T/internal/providers/edid"
@@ -31,6 +32,7 @@ import (
 	"github.com/zen66ten/HW-T/internal/providers/pci"
 	"github.com/zen66ten/HW-T/internal/providers/rapl"
 	"github.com/zen66ten/HW-T/internal/providers/smart"
+	"github.com/zen66ten/HW-T/internal/providers/system"
 	"github.com/zen66ten/HW-T/internal/providers/usb"
 )
 
@@ -156,6 +158,8 @@ func run(configPath, socket, listen, sysfs string) error {
 		pci.New(sysfs, slow),
 		edac.New(sysfs, slow),
 		dmi.New(sysfs),
+		cpuinfo.New(sysfs),
+		system.New(sysfs),
 		usb.New(sysfs),
 		edid.New(sysfs),
 	)

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +26,22 @@ type Disk struct {
 	Model       string
 	Serial      string
 	FirmwareRev string
+	Capacity    string // human-readable, e.g. "1.0 TB"
+	Rotational  bool   // true = HDD, false = SSD/NVMe
+}
+
+// humanCapacity converts a 512-byte sector count to a decimal-GB/TB string,
+// matching how drive vendors and HWiNFO label capacity.
+func humanCapacity(sectors int64) string {
+	bytes := float64(sectors) * 512
+	switch {
+	case bytes >= 1e12:
+		return fmt.Sprintf("%.1f TB", bytes/1e12)
+	case bytes >= 1e9:
+		return fmt.Sprintf("%.0f GB", bytes/1e9)
+	default:
+		return fmt.Sprintf("%.0f MB", bytes/1e6)
+	}
 }
 
 // virtualPrefixes are block devices that are never physical drives worth
@@ -63,6 +80,14 @@ func DiscoverDisks(sysfsRoot string) ([]Disk, error) {
 			d.StableID = wwid
 		} else {
 			d.StableID = "dev-" + name
+		}
+		if s, err := readString(filepath.Join(bdir, "size")); err == nil {
+			if sectors, err := strconv.ParseInt(s, 10, 64); err == nil && sectors > 0 {
+				d.Capacity = humanCapacity(sectors)
+			}
+		}
+		if rot, err := readString(filepath.Join(bdir, "queue", "rotational")); err == nil {
+			d.Rotational = rot == "1"
 		}
 		disks = append(disks, d)
 	}

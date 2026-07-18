@@ -19,9 +19,18 @@ func TestEnrichLabel(t *testing.T) {
 		{"iwlwifi_1", "temp1", "temp1", "WiFi Module"},
 		{"package-0", "package", "package-0", "CPU Package Power"},
 		{"package-0", "core", "core", "CPU Cores Power"},
-		// Unknown chips and labels pass through untouched.
-		{"weirdchip", "temp9", "temp9", "temp9"},
+		// Unlabeled channels get the kind spelled out.
+		{"weirdchip", "temp9", "temp9", "Temperature #9"},
+		{"weirdchip", "in3", "in3", "Voltage #3"},
+		{"weirdchip", "fan2", "fan2", "Fan #2"},
+		{"weirdchip", "curr1", "curr1", "Current #1"},
+		{"weirdchip", "pwm4", "pwm4", "Fan PWM #4"},
+		// Voltage rails and driver labels.
+		{"it87", "in5", "+12V", "+12V Rail"},
+		{"amdgpu", "in0", "vddgpu", "GPU Core Voltage"},
+		// Driver-provided labels pass through untouched.
 		{"nvidia", "temp", "GPU Temp", "GPU Temp"},
+		{"weirdchip", "inx", "inx", "inx"},
 	}
 	for _, c := range cases {
 		if got := EnrichLabel(c.chip, c.id, c.label); got != c.want {

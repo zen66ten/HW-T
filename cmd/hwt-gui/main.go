@@ -1,30 +1,23 @@
-// hwt-gui is the native desktop client (SPEC §8.2), modelled on HWiNFO's
-// multi-window layout. A main window carries the menu, toolbar and a
-// hardware navigation tree. Two independent child windows open from the
-// toolbar: System Summary (component frames at a glance) and Sensor Status
-// (every sensor with current/min/max/avg). Either child window can be
-// closed on its own while the main window stays open. A plain client of
-// the hwtd UDS API; the only binary needing CGO.
+// hwt-gui is the native desktop client (SPEC §8.2), an HWiNFO-style
+// recreation built with Qt 6 via the miqt bindings. The main window is the
+// System Summary: CPU column on the left, motherboard and memory in the
+// middle, GPU on the right, each with a vendor badge. A toolbar button
+// toggles the separate Sensor Status window (every sensor with
+// current/min/max/avg and a per-kind icon). A plain client of the hwtd UDS
+// API; the only binary needing CGO.
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"image/color"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
+	"github.com/mappu/miqt/qt6"
 
-	"github.com/zen66ten/HW-T/internal/core"
 	"github.com/zen66ten/HW-T/pkg/client"
 )
 
@@ -32,301 +25,276 @@ func main() {
 	socket := flag.String("socket", client.DefaultSocket(), "hwtd unix socket")
 	flag.Parse()
 
-	a := app.NewWithID("com.github.zen66ten.hwt")
-	a.Settings().SetTheme(&hwtTheme{p: pal})
+	qapp := qt6.NewQApplication(os.Args)
+	qapp.SetStyleSheet(appStyle)
 
-	u := newUI(a, *socket)
-	u.main = a.NewWindow("HW-T")
-	u.main.Resize(fyne.NewSize(680, 560))
-	u.main.SetContent(u.buildMain())
-	u.main.SetMainMenu(u.mainMenu())
+	u := &ui{socket: *socket}
+	u.buildMainWindow()
+	u.buildSensorWindow()
 
-	u.main.SetOnClosed(func() { u.stopSub() })
-	a.Lifecycle().SetOnStarted(func() {
-		go u.startSub(time.Second)
-		go u.fetchDevices()
-		// Open both child windows by default, HWiNFO style.
-		fyne.Do(func() {
-			u.openSummary()
-			u.openSensors()
-			u.main.RequestFocus()
+	// Data flows in on background goroutines and is only stored; all Qt
+	// work happens on the main thread, driven by a 1 Hz repaint timer.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go u.runSubscription(ctx)
+	go u.runDeviceFetch(ctx)
+
+	tick := qt6.NewQTimer()
+	tick.OnTimeout(u.refresh)
+	tick.Start(1000)
+
+	// Optional headless screenshot: HWT_SHOT=/path/prefix (works with
+	// QT_QPA_PLATFORM=offscreen). Grabs both windows then quits.
+	if shot := os.Getenv("HWT_SHOT"); shot != "" {
+		t := qt6.NewQTimer()
+		t.SetSingleShot(true)
+		t.OnTimeout(func() {
+			u.refresh()
+			u.win.Grab().Save2(shot+"-summary.png", "PNG")
+			u.sensorWin.Resize(600, 2600) // capture the full sensor list
+			u.sensorWin.Grab().Save2(shot+"-sensors.png", "PNG")
+			qt6.QCoreApplication_Quit()
 		})
-	})
+		t.Start(4000)
+	}
 
-	u.main.ShowAndRun()
+	u.win.Show()
+	u.win.Resize(1560, u.win.SizeHint().Height())
+	qt6.QApplication_Exec()
 }
 
-// sensorRow is one line in the Sensor Status table.
-type sensorRow struct {
-	name, cur, min, max, avg *canvas.Text
-	kind                     core.Kind
-}
-
-// summaryRow is one live line in a System Summary frame.
-type summaryRow struct {
-	box    *valueBox
-	render func(snap map[string]client.Sensor) string
-}
-
+// ui owns both windows and the shared data snapshot. The mutex guards
+// everything below it; background goroutines write, the Qt main thread
+// reads inside refresh().
 type ui struct {
-	app    fyne.App
-	main   fyne.Window
 	socket string
 
+	win         *qt6.QFrame
+	summarySlot *qt6.QVBoxLayout // holds the three-column summary, rebuilt on device changes
+	summaryBody *qt6.QWidget
+	sensorBtn   *qt6.QPushButton
+	status      *qt6.QLabel
+
+	sensorWin *qt6.QWidget
+	tree      *sensorTree
+
+	live []liveLabel // summary labels refreshed every tick
+
 	mu        sync.Mutex
-	signature string
 	devices   []client.Device
 	sensors   []client.Sensor
-	firing    map[string]bool
-	selected  string
+	connected bool
+	lastErr   string
 
-	// main-window navigation
-	tree     *widget.Tree
-	detail   *fyne.Container
-	mainStat *widget.Label
-
-	// System Summary child window
-	summaryWin  fyne.Window
-	summaryBody *fyne.Container
-	summaryRows []summaryRow
-
-	// Sensor Status child window
-	sensorWin  fyne.Window
-	sensorBody *fyne.Container
-	rows       map[string]*sensorRow
-	chart      *chart
-
-	subMu     sync.Mutex
-	subCancel context.CancelFunc
-	subWG     sync.WaitGroup
-
-	rpcMu sync.Mutex
-	rpc   *client.Client
+	builtFor string // device+sensor signature the summary was last built for
+	gpuIndex int    // selected GPU in the summary combo
+	memIndex int    // selected memory module in the summary combo
+	rebuild  bool   // set when gpuIndex/memIndex change
 }
 
-func newUI(a fyne.App, socket string) *ui {
-	return &ui{
-		app: a, socket: socket,
-		firing: map[string]bool{},
-		rows:   map[string]*sensorRow{},
-	}
+// liveLabel is one summary value that re-renders from each snapshot. A
+// non-empty returned style replaces the label's stylesheet (used for
+// green/red health marks).
+type liveLabel struct {
+	l      *qt6.QLabel
+	render func(snap map[string]client.Sensor) (text, style string)
 }
 
 // --- main window ---
 
-func (u *ui) buildMain() fyne.CanvasObject {
-	u.mainStat = widget.NewLabel("connecting…")
+func (u *ui) buildMainWindow() {
+	// Frameless top-level window with a thin teal outline, like HWiNFO.
+	win := qt6.NewQFrame3(nil, qt6.FramelessWindowHint)
+	win.SetStyleSheet("background-color:#000000; border:1px solid #2f6d6d;")
+	win.SetWindowTitle("HW-T - System Summary")
+	u.win = win
 
-	summaryBtn := widget.NewButtonWithIcon("Summary", theme.ListIcon(), u.openSummary)
-	sensorsBtn := widget.NewButtonWithIcon("Sensors", theme.ComputerIcon(), u.openSensors)
-	reportBtn := widget.NewButtonWithIcon("Save Report", theme.DocumentSaveIcon(), u.saveReport)
-	toolbar := container.NewHBox(summaryBtn, sensorsBtn, reportBtn)
+	outer := vbox(0)
+	outer.SetContentsMargins(1, 1, 1, 1)
+	outer.AddWidget(u.buildTitleBar())
+	outer.AddWidget(u.buildToolbar())
 
-	u.tree = widget.NewTree(u.treeChildren, u.treeIsBranch, u.treeCreate, u.treeUpdate)
-	u.tree.OnSelected = u.treeSelected
-	u.detail = container.NewVBox(widget.NewLabel("select a device on the left"))
+	u.summarySlot = vbox(0)
+	u.summarySlot.SetContentsMargins(6, 4, 6, 6)
+	u.summaryBody = lbl("connecting to hwtd…", statusQSS, qt6.AlignCenter).QWidget
+	u.summaryBody.SetMinimumHeight(300)
+	u.summarySlot.AddWidget(u.summaryBody)
+	outer.AddLayout(u.summarySlot.QLayout)
 
-	split := container.NewHSplit(u.tree, container.NewVScroll(u.detail))
-	split.SetOffset(0.42)
-
-	return container.NewBorder(
-		container.NewVBox(toolbar, widget.NewSeparator()),
-		container.NewVBox(widget.NewSeparator(), u.mainStat),
-		nil, nil, split)
+	win.SetLayout(outer.QLayout)
 }
 
-func (u *ui) mainMenu() *fyne.MainMenu {
-	return fyne.NewMainMenu(
-		fyne.NewMenu("Program",
-			fyne.NewMenuItem("Refresh", func() { go u.fetchDevices() }),
-			fyne.NewMenuItem("Quit", func() { u.app.Quit() }),
-		),
-		fyne.NewMenu("Monitoring",
-			fyne.NewMenuItem("System Summary", u.openSummary),
-			fyne.NewMenuItem("Sensor Status", u.openSensors),
-		),
-		fyne.NewMenu("Report",
-			fyne.NewMenuItem("Save Report…", u.saveReport),
-		),
-		fyne.NewMenu("View",
-			fyne.NewMenuItem("Toggle Light/Dark", u.toggleTheme),
-		),
-	)
+// buildTitleBar creates the custom title bar (title text, minimize and
+// close buttons) and wires window dragging, since the window is frameless.
+func (u *ui) buildTitleBar() *qt6.QWidget {
+	bar := qt6.NewQWidget2()
+	bar.SetFixedHeight(26)
+	bar.SetStyleSheet("background-color:#000000; border:none;")
+
+	tb := hbox(0)
+	tb.SetContentsMargins(8, 0, 0, 0)
+	title := lbl("HW-T  - System Summary",
+		"color:#f2f2f2; font-weight:bold; background:transparent; border:none;",
+		qt6.AlignLeft|qt6.AlignVCenter)
+	tb.AddWidget(title.QWidget)
+	tb.AddStretch()
+
+	minBtn := qt6.NewQPushButton3("–")
+	minBtn.SetFixedSize2(36, 26)
+	minBtn.SetStyleSheet(
+		"QPushButton{background-color:#13201f; color:#ffffff; border:none; font-size:13px; padding:0;}" +
+			"QPushButton:hover{background-color:#1f4d4d;}")
+	minBtn.OnClicked(func() { u.win.ShowMinimized() })
+	tb.AddWidget(minBtn.QWidget)
+
+	closeBtn := qt6.NewQPushButton3("✕")
+	closeBtn.SetFixedSize2(36, 26)
+	closeBtn.SetStyleSheet(
+		"QPushButton{background-color:#c0392b; color:#ffffff; border:none; font-size:13px; padding:0;}" +
+			"QPushButton:hover{background-color:#e04b3a;}")
+	closeBtn.OnClicked(func() { qt6.QCoreApplication_Quit() })
+	tb.AddWidget(closeBtn.QWidget)
+	bar.SetLayout(tb.QLayout)
+
+	// Drag-to-move for the frameless window. StartSystemMove() hands the
+	// drag to the compositor's own move grab; a manual Move() per mouse
+	// event is a no-op (or worse, a stall) under native Wayland, which
+	// doesn't let clients reposition top-level windows directly.
+	bar.OnMousePressEvent(func(super func(event *qt6.QMouseEvent), event *qt6.QMouseEvent) {
+		if event.Button() == qt6.LeftButton {
+			u.win.WindowHandle().StartSystemMove()
+		}
+	})
+	return bar
 }
 
-func (u *ui) toggleTheme() {
-	if pal == &palLight {
-		pal = &palDark
-	} else {
-		pal = &palLight
-	}
-	u.app.Settings().SetTheme(&hwtTheme{p: pal})
-	u.mu.Lock()
-	u.signature = "" // force every open window to rebuild next tick
-	u.mu.Unlock()
-}
+// buildToolbar is the row under the title bar: the Sensors window toggle,
+// Save Report, and the connection status on the right.
+func (u *ui) buildToolbar() *qt6.QWidget {
+	bar := qt6.NewQWidget2()
+	bar.SetStyleSheet("background:transparent; border:none;")
+	row := hbox(6)
+	row.SetContentsMargins(6, 4, 6, 2)
 
-// --- System Summary child window ---
-
-func (u *ui) openSummary() {
-	if u.summaryWin != nil {
-		u.summaryWin.RequestFocus()
-		return
-	}
-	w := u.app.NewWindow("System Summary")
-	w.Resize(fyne.NewSize(1180, 560))
-	u.summaryBody = container.NewStack(widget.NewLabel("waiting for data…"))
-	w.SetContent(u.summaryBody)
-	w.SetOnClosed(func() {
-		u.mu.Lock()
-		u.summaryWin = nil
-		u.summaryBody = nil
-		u.summaryRows = nil
-		u.mu.Unlock()
+	u.sensorBtn = qt6.NewQPushButton3("Sensors")
+	u.sensorBtn.SetCheckable(true)
+	u.sensorBtn.SetChecked(true)
+	u.sensorBtn.OnToggled(func(on bool) {
+		if on {
+			u.sensorWin.Show()
+			u.sensorWin.Raise()
+		} else {
+			u.sensorWin.Hide()
+		}
 	})
-	u.summaryWin = w
+	row.AddWidget(u.sensorBtn.QWidget)
 
-	u.mu.Lock()
-	sensors := u.sensors
-	u.mu.Unlock()
-	u.rebuildSummary(sensors)
-	w.Show()
-}
+	report := qt6.NewQPushButton3("Save Report")
+	report.OnClicked(u.saveReport)
+	row.AddWidget(report.QWidget)
 
-// --- Sensor Status child window ---
+	row.AddStretch()
+	u.status = lbl("connecting…", statusQSS, qt6.AlignRight|qt6.AlignVCenter)
+	row.AddWidget(u.status.QWidget)
 
-func (u *ui) openSensors() {
-	if u.sensorWin != nil {
-		u.sensorWin.RequestFocus()
-		return
-	}
-	w := u.app.NewWindow("Sensor Status")
-	w.Resize(fyne.NewSize(620, 700))
-	u.chart = newChart()
-
-	logCheck := widget.NewCheck("Log to file", func(on bool) { go u.toggleLog(on) })
-	rate := widget.NewSelect([]string{"0.5 s", "1.0 s", "2.0 s", "5.0 s"}, func(s string) {
-		d := map[string]time.Duration{
-			"0.5 s": 500 * time.Millisecond, "1.0 s": time.Second,
-			"2.0 s": 2 * time.Second, "5.0 s": 5 * time.Second,
-		}[s]
-		go u.startSub(d)
-	})
-	rate.SetSelectedIndex(1)
-	resetBtn := widget.NewButton("Reset", func() {
-		go u.withRPC(func(c *client.Client) error { return c.Reset("") })
-	})
-	controls := container.NewHBox(logCheck, widget.NewLabel("  rate"), rate, resetBtn)
-
-	u.sensorBody = container.NewStack(widget.NewLabel("waiting for data…"))
-	content := container.NewBorder(nil,
-		container.NewVBox(widget.NewSeparator(), u.chart, controls),
-		nil, nil, u.sensorBody)
-	w.SetContent(content)
-	w.SetOnClosed(func() {
-		u.mu.Lock()
-		u.sensorWin = nil
-		u.sensorBody = nil
-		u.rows = map[string]*sensorRow{}
-		u.chart = nil
-		u.mu.Unlock()
-	})
-	u.sensorWin = w
-
-	u.mu.Lock()
-	sensors := u.sensors
-	u.mu.Unlock()
-	u.rebuildSensors(sensors)
-	w.Show()
+	bar.SetLayout(row.QLayout)
+	return bar
 }
 
 func (u *ui) saveReport() {
-	var report string
-	err := u.withRPC(func(c *client.Client) error {
-		var e error
-		report, e = c.Report("html", nil, false)
-		return e
-	})
-	if err != nil {
-		u.mainStat.SetText("report failed: " + err.Error())
-		return
-	}
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, "hwt-report.html")
-	if err := os.WriteFile(path, []byte(report), 0o644); err != nil {
-		u.mainStat.SetText("report failed: " + err.Error())
-		return
-	}
-	u.mainStat.SetText("report saved to " + path)
-}
-
-// --- subscription ---
-
-func (u *ui) startSub(interval time.Duration) {
-	u.subMu.Lock()
-	defer u.subMu.Unlock()
-	u.stopSubLocked()
-	ctx, cancel := context.WithCancel(context.Background())
-	u.subCancel = cancel
-	u.subWG.Add(1)
 	go func() {
-		defer u.subWG.Done()
-		for ctx.Err() == nil {
-			err := client.Subscribe(ctx, u.socket, interval, u.onSnapshot)
-			if ctx.Err() != nil {
-				return
-			}
-			msg := "disconnected, retrying"
-			if err != nil {
-				msg = fmt.Sprintf("disconnected (%v), retrying", err)
-			}
-			fyne.Do(func() { u.mainStat.SetText(msg) })
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(3 * time.Second):
+		var report string
+		err := withClient(u.socket, func(c *client.Client) error {
+			var e error
+			report, e = c.Report("html", nil, false)
+			return e
+		})
+		msg := ""
+		if err != nil {
+			msg = "report failed: " + err.Error()
+		} else {
+			home, _ := os.UserHomeDir()
+			path := filepath.Join(home, "hwt-report.html")
+			if werr := os.WriteFile(path, []byte(report), 0o644); werr != nil {
+				msg = "report failed: " + werr.Error()
+			} else {
+				msg = "report saved to " + path
 			}
 		}
+		u.mu.Lock()
+		u.lastErr = msg
+		u.mu.Unlock()
 	}()
 }
 
-func (u *ui) stopSub() {
-	u.subMu.Lock()
-	defer u.subMu.Unlock()
-	u.stopSubLocked()
-}
+// --- data plumbing (background goroutines; no Qt calls here) ---
 
-func (u *ui) stopSubLocked() {
-	if u.subCancel != nil {
-		u.subCancel()
-		u.subWG.Wait()
-		u.subCancel = nil
+func (u *ui) runSubscription(ctx context.Context) {
+	for ctx.Err() == nil {
+		err := client.Subscribe(ctx, u.socket, time.Second, func(sensors []client.Sensor) {
+			u.mu.Lock()
+			u.sensors = sensors
+			u.connected = true
+			u.mu.Unlock()
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		u.mu.Lock()
+		u.connected = false
+		if err != nil {
+			u.lastErr = err.Error()
+		}
+		u.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 
-func (u *ui) withRPC(fn func(*client.Client) error) error {
-	u.rpcMu.Lock()
-	defer u.rpcMu.Unlock()
-	for attempt := 0; attempt < 2; attempt++ {
-		if u.rpc == nil {
-			c, err := client.Dial(u.socket)
-			if err != nil {
-				return err
-			}
-			u.rpc = c
+func (u *ui) runDeviceFetch(ctx context.Context) {
+	for ctx.Err() == nil {
+		var devs []client.Device
+		err := withClient(u.socket, func(c *client.Client) error {
+			var e error
+			devs, e = c.Devices()
+			return e
+		})
+		if err == nil && len(devs) > 0 {
+			u.mu.Lock()
+			u.devices = devs
+			u.mu.Unlock()
+			return
 		}
-		if err := fn(u.rpc); err != nil {
-			u.rpc.Close()
-			u.rpc = nil
-			continue
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
 		}
-		return nil
 	}
-	return fmt.Errorf("rpc failed after reconnect")
 }
 
-func snapshotSignature(sensors []client.Sensor) string {
+func withClient(socket string, fn func(*client.Client) error) error {
+	c, err := client.Dial(socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	return fn(c)
+}
+
+// --- per-tick refresh (Qt main thread) ---
+
+// signature captures the device/sensor shape the summary and sensor tree
+// were built for; when it changes (daemon restart, hotplug) both rebuild.
+func signature(devices []client.Device, sensors []client.Sensor) string {
 	var b []byte
+	for _, d := range devices {
+		b = append(b, d.ID...)
+		b = append(b, '\n')
+	}
 	for _, s := range sensors {
 		b = append(b, s.ID...)
 		b = append(b, '\n')
@@ -334,153 +302,44 @@ func snapshotSignature(sensors []client.Sensor) string {
 	return string(b)
 }
 
-func (u *ui) onSnapshot(sensors []client.Sensor) {
-	var alerts []client.AlertStatus
-	u.withRPC(func(c *client.Client) error {
-		var err error
-		alerts, err = c.Alerts()
-		return err
-	})
-	firing := map[string]bool{}
-	for _, a := range alerts {
-		if a.State == "firing" {
-			firing[a.Sensor] = true
-		}
-	}
-
+func (u *ui) refresh() {
 	u.mu.Lock()
-	devicesReady := len(u.devices) > 0
+	devices := u.devices
+	sensors := u.sensors
+	connected := u.connected
+	lastErr := u.lastErr
+	rebuild := u.rebuild
+	u.rebuild = false
 	u.mu.Unlock()
-	if !devicesReady {
-		u.fetchDevices()
+
+	sig := signature(devices, sensors)
+	if sig != u.builtFor || rebuild {
+		u.builtFor = sig
+		u.rebuildSummary(devices, sensors)
+		u.tree.rebuild(devices, sensors)
 	}
 
-	sig := snapshotSignature(sensors)
 	snap := make(map[string]client.Sensor, len(sensors))
 	for _, s := range sensors {
 		snap[s.ID] = s
 	}
-
-	fyne.Do(func() {
-		u.mu.Lock()
-		rebuild := sig != u.signature
-		u.signature = sig
-		u.firing = firing
-		u.sensors = sensors
-		summaryOpen := u.summaryWin != nil
-		sensorOpen := u.sensorWin != nil
-		u.mu.Unlock()
-
-		if rebuild {
-			if summaryOpen {
-				u.rebuildSummary(sensors)
-			}
-			if sensorOpen {
-				u.rebuildSensors(sensors)
-			}
-			if u.tree != nil {
-				u.tree.Refresh()
-			}
-		}
-		if sensorOpen {
-			for _, s := range sensors {
-				if row, ok := u.rows[s.ID]; ok {
-					u.updateRow(row, s, firing[s.ID])
-				}
-			}
-		}
-		if summaryOpen {
-			for _, sr := range u.summaryRows {
-				sr.box.Set(sr.render(snap), nil)
-			}
-		}
-
-		txt := fmt.Sprintf("%d sensors, connected", len(sensors))
-		if len(firing) > 0 {
-			txt = fmt.Sprintf("⚠ %d alert(s)   %s", len(firing), txt)
-		}
-		u.mainStat.SetText(txt)
-	})
-	u.refreshChart()
-}
-
-func (u *ui) updateRow(row *sensorRow, s client.Sensor, firing bool) {
-	set := func(t *canvas.Text, txt string, col color.Color) {
-		t.Text, t.Color = txt, col
-		t.Refresh()
-	}
-	if s.Err != "" {
-		set(row.cur, "N/A", pal.dim)
-		set(row.min, "", pal.dim)
-		set(row.max, "", pal.dim)
-		set(row.avg, "", pal.dim)
-		return
-	}
-	curCol := color.Color(pal.foreground)
-	if firing {
-		curCol = pal.crit
-	} else if row.kind == core.KindTemp {
-		if crit, ok := s.Limits["crit"]; ok && s.Cur >= crit {
-			curCol = pal.crit
-		} else if high, ok := s.Limits["max"]; ok && s.Cur >= high {
-			curCol = pal.warn
+	for _, ll := range u.live {
+		text, style := ll.render(snap)
+		ll.l.SetText(text)
+		if style != "" {
+			ll.l.SetStyleSheet(style)
 		}
 	}
-	set(row.cur, core.FormatValue(row.kind, s.Cur), curCol)
-	set(row.min, core.FormatValue(row.kind, s.Min), pal.dim)
-	set(row.max, core.FormatValue(row.kind, s.Max), pal.dim)
-	set(row.avg, core.FormatValue(row.kind, s.Avg), pal.dim)
-}
+	u.tree.update(sensors)
 
-func (u *ui) refreshChart() {
-	u.mu.Lock()
-	id, ch := u.selected, u.chart
-	row := u.rows[id]
-	u.mu.Unlock()
-	if id == "" || row == nil || ch == nil {
-		return
+	switch {
+	case !connected && lastErr != "":
+		u.status.SetText(lastErr)
+	case !connected:
+		u.status.SetText("disconnected, retrying…")
+	case lastErr != "":
+		u.status.SetText(fmt.Sprintf("%s   |   %d sensors", lastErr, len(sensors)))
+	default:
+		u.status.SetText(fmt.Sprintf("%d sensors, connected", len(sensors)))
 	}
-	var pts []client.Point
-	if err := u.withRPC(func(c *client.Client) error {
-		var err error
-		pts, err = c.History(id)
-		return err
-	}); err != nil {
-		return
-	}
-	label, kind := row.name.Text, row.kind
-	fyne.Do(func() { ch.SetSeries(label, kind, pts) })
-}
-
-func (u *ui) fetchDevices() {
-	var devs []client.Device
-	if err := u.withRPC(func(c *client.Client) error {
-		var err error
-		devs, err = c.Devices()
-		return err
-	}); err != nil {
-		return
-	}
-	u.mu.Lock()
-	u.devices = devs
-	u.signature = ""
-	u.mu.Unlock()
-}
-
-func (u *ui) toggleLog(on bool) {
-	if !on {
-		u.withRPC(func(c *client.Client) error { return c.LogStop() })
-		return
-	}
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, fmt.Sprintf("hwt-log-%s.csv", time.Now().Format("20060102-150405")))
-	err := u.withRPC(func(c *client.Client) error {
-		_, err := c.LogStart(path, "csv", nil)
-		return err
-	})
-	msg := "logging to " + path
-	if err != nil {
-		msg = "log start failed: " + err.Error()
-	}
-	fyne.Do(func() { u.mainStat.SetText(msg) })
 }

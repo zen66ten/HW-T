@@ -1,6 +1,9 @@
 package core
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // chipDisplayNames maps known kernel driver names to a human-readable
 // label. Chip.Name / Device.Name stay the raw driver name everywhere else
@@ -22,6 +25,7 @@ var chipDisplayNames = map[string]string{
 	"nouveau":          "NVIDIA GPU (nouveau)",
 	"jc42":             "DDR4 DIMM Temp Sensor",
 	"spd5118":          "DDR5 DIMM Temp Sensor",
+	"cpufreq":          "CPU Core Clocks",
 }
 
 // DisplayName returns a human-friendly label for a chip/driver name,
@@ -32,6 +36,9 @@ func DisplayName(chipName string) string {
 	}
 	if strings.HasPrefix(chipName, "iwlwifi") {
 		return "WiFi Adapter"
+	}
+	if strings.HasPrefix(chipName, "package-") {
+		return "CPU Package (RAPL)"
 	}
 	return chipName
 }
@@ -67,6 +74,9 @@ var chipChannelLabels = map[string]map[string]string{
 		"edge":     "GPU Edge",
 		"junction": "GPU Hotspot",
 		"mem":      "GPU Memory",
+		"vddgpu":   "GPU Core Voltage",
+		"vddnb":    "GPU SoC Voltage",
+		"PPT":      "GPU Package Power",
 	},
 	"nvme": {
 		"Composite": "Drive Composite",
@@ -88,10 +98,23 @@ var genericChannelLabels = map[string]string{
 	"PECI Agent 0": "CPU (PECI)",
 	"TSI0_TEMP":    "CPU (TSI)",
 	"Vcore":        "CPU Core Voltage",
+	"Vsoc":         "CPU SoC Voltage",
+	"Vddcr_soc":    "CPU SoC Voltage",
+	"Icore":        "CPU Core Current",
+	"Isoc":         "CPU SoC Current",
 	"Vbat":         "Battery Voltage",
 	"AVCC":         "Analog +3.3V",
 	"3VCC":         "+3.3V",
 	"3VSB":         "+3.3V Standby",
+	"+3.3V":        "+3.3V",
+	"+5V":          "+5V Rail",
+	"+12V":         "+12V Rail",
+	"VTT":          "Memory Termination (VTT)",
+	"DRAM":         "DRAM Voltage",
+	"VIN0":         "Voltage Input 0",
+	"VIN1":         "Voltage Input 1",
+	"VIN2":         "Voltage Input 2",
+	"VIN3":         "Voltage Input 3",
 }
 
 // raplZoneLabels names the powercap domains.
@@ -139,7 +162,40 @@ func EnrichLabel(chipName, channelID, label string) string {
 			return friendly
 		}
 	}
+	// Chips without driver labels leave label == channel ID ("in3",
+	// "fan2"). Spell those out so the sensor table never shows raw IDs.
+	if label == channelID {
+		if friendly := describeChannel(channelID); friendly != "" {
+			return friendly
+		}
+	}
 	return label
+}
+
+// channelKindNames spells out the hwmon channel classes for unlabeled
+// channels: "in3" -> "Voltage #3".
+var channelKindNames = []struct{ prefix, name string }{
+	{"temp", "Temperature #"},
+	{"in", "Voltage #"},
+	{"fan", "Fan #"},
+	{"curr", "Current #"},
+	{"power", "Power #"},
+	{"pwm", "Fan PWM #"},
+	{"energy", "Energy #"},
+	{"humidity", "Humidity #"},
+}
+
+func describeChannel(id string) string {
+	for _, k := range channelKindNames {
+		num, found := strings.CutPrefix(id, k.prefix)
+		if !found || num == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(num); err == nil {
+			return k.name + num
+		}
+	}
+	return ""
 }
 
 func parseCPUChannel(id string) (num string, eff bool, ok bool) {

@@ -51,11 +51,7 @@ func (p *Provider) Discover(ctx context.Context) ([]core.Device, error) {
 			ID:       id,
 			Provider: "smart",
 			Name:     name,
-			Attrs: map[string]string{
-				"device":       d.Path,
-				"serial":       d.Serial,
-				"firmware_rev": d.FirmwareRev,
-			},
+			Attrs:    attrsOf(d),
 			Channels: []core.ChannelInfo{
 				{ID: "health", Kind: core.KindHealth, Label: "Health"},
 				{ID: "temp", Kind: core.KindTemp, Label: "Temperature"},
@@ -66,6 +62,27 @@ func (p *Provider) Discover(ctx context.Context) ([]core.Device, error) {
 		})
 	}
 	return devs, nil
+}
+
+// attrsOf builds the inventory attributes for a disk, dropping empty ones.
+func attrsOf(d Disk) map[string]string {
+	kind := "SSD"
+	if d.Rotational {
+		kind = "HDD"
+	}
+	attrs := map[string]string{
+		"device":       d.Path,
+		"serial":       d.Serial,
+		"firmware_rev": d.FirmwareRev,
+		"capacity":     d.Capacity,
+		"type":         kind,
+	}
+	for k, v := range attrs {
+		if v == "" {
+			delete(attrs, k)
+		}
+	}
+	return attrs
 }
 
 func (p *Provider) Collect(ctx context.Context, dev core.DeviceID) ([]core.Reading, error) {

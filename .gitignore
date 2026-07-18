@@ -9,6 +9,7 @@ CLAUDE.md
 /hwt-gui
 dist/
 build/
+gui/hwinfo-gui
 
 # Editor / IDE
 .vscode/

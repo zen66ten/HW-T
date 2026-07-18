@@ -53,6 +53,15 @@ func (p *Provider) Discover(ctx context.Context) ([]core.Device, error) {
 		if g.MemTotalMiB != nil {
 			attrs["vram_total_mib"] = fmt.Sprintf("%.0f", *g.MemTotalMiB)
 		}
+		if g.DriverVersion != "" {
+			attrs["driver_version"] = g.DriverVersion
+		}
+		if g.VBIOSVersion != "" {
+			attrs["vbios"] = g.VBIOSVersion
+		}
+		if g.PCIeGen != "" && g.PCIeWidth != "" {
+			attrs["pcie_link"] = "Gen" + g.PCIeGen + " x" + g.PCIeWidth
+		}
 		dev := core.Device{
 			ID:       id,
 			Provider: "nvidia",
