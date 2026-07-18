@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Linux-blue?logo=linux&logoColor=white" alt="Platform: Linux">
-  <img src="https://img.shields.io/badge/Framework-Fyne-7d56c2" alt="Framework: Fyne">
+  <img src="https://img.shields.io/badge/GUI-Qt6-41cd52?logo=qt&logoColor=white" alt="GUI: Qt6">
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License: MIT">
 </p>
@@ -41,9 +41,9 @@ controllers, or CPU registers.
 - **Live sensors panel.** Every sensor on the system, grouped by chip,
   with current, minimum, maximum and average values. Available as a
   native desktop app (below), a terminal TUI, and a plain CLI table.
-- **History graphs.** The desktop app draws a rolling bar graph next to
-  every sensor and keeps two hours of history behind each one. Click a
-  row to see the full graph.
+- **History buffers.** Every sensor keeps two hours of samples behind
+  its current value, queryable with `hwtctl history` or the API. (The
+  desktop app does not draw a graph from it yet.)
 - **Stable sensor identity.** Sensors are identified by their position in
   the device tree, such as `hwmon:pci-0000:00:18.3:temp1`, never by
   kernel enumeration order. Settings and history survive reboots and
@@ -71,7 +71,15 @@ controllers, or CPU registers.
 - **Fault isolation.** If one data source misbehaves, the daemon
   quarantines it and everything else keeps running.
 
-![hwt-gui sensors panel](docs/screenshot-light.png)
+<p align="center">
+  <img src="docs/screenshot-summary.png" alt="hwt-gui System Summary window" width="900"><br>
+  <sub>System Summary: CPU, motherboard, memory and GPU at a glance</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshot-sensors.png" alt="hwt-gui Sensor Status window" width="340"><br>
+  <sub>Sensor Status: every sensor, current/min/max/avg, with an icon per kind</sub>
+</p>
 
 ## Supported Hardware
 
@@ -172,22 +180,44 @@ At runtime everything is optional. If a piece is missing, HW-T degrades
 gracefully and reports what it could not read.
 
 - A Linux kernel with `hwmon` support, which is any modern kernel. Load
-  your board's Super-I/O module to get motherboard sensors.
+  your board's Super-I/O module (`nct6775`, `it87`, ...) to get
+  motherboard voltage and fan sensors.
 - `smartmontools`, for drive health.
 - The NVIDIA proprietary driver, for NVIDIA GPU telemetry.
 - `hwdata`, for PCI and USB device names. Most distros preinstall it.
+- On AMD Ryzen, the `zenpower` (Zen/Zen+/Zen2) or `zenpower3` (adds Zen3)
+  out-of-tree driver, for CPU core and SoC voltage, current and power.
+  The in-tree `k10temp` reports temperatures only, so without `zenpower`
+  the CPU voltage fields stay blank. It binds the same PCI device as
+  `k10temp`, so blacklist `k10temp` when loading it.
 
-Building needs Go 1.24 or newer. The GUI additionally needs CGO and the
-windowing headers:
+  ```
+  # Fedora (COPR akmod, rebuilds against each kernel)
+  sudo dnf copr enable shdwchn10/zenpower3
+  sudo dnf install kernel-devel-$(uname -r) zenpower3
+  echo 'blacklist k10temp' | sudo tee /etc/modprobe.d/zenpower.conf
+  sudo systemctl reboot
+  # Arch: the zenpower3-dkms AUR package. Elsewhere: build the DKMS
+  # module from source.
+  ```
+
+Building needs Go 1.26 or newer. The GUI (`hwt-gui`) additionally needs
+CGO and the Qt 6 development files (headers, `moc`, pkg-config data);
+everything else is pure Go and builds with `CGO_ENABLED=0`:
 
 ```
 # Fedora
-sudo dnf install gcc mesa-libGL-devel libX11-devel libXcursor-devel \
-  libXrandr-devel libXinerama-devel libXi-devel libXxf86vm-devel \
-  wayland-devel libxkbcommon-devel wayland-protocols-devel
+sudo dnf install gcc-c++ qt6-qtbase-devel
 # Debian/Ubuntu
-sudo apt install gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+sudo apt install g++ qt6-base-dev
+# Arch
+sudo pacman -S gcc qt6-base
 ```
+
+At runtime, `hwt-gui` needs only the Qt 6 base libraries, which the devel
+packages above already pull in; a plain end user would install the
+runtime package instead (`qt6-qtbase` on Fedora, `libqt6widgets6` on
+Debian/Ubuntu).
 
 For development, providers read from a configurable `sysfs` root, so the
 captured fixture trees in `testdata/` exercise the same code paths as
@@ -197,6 +227,27 @@ real hardware:
 go test ./...
 ./hwtd -sysfs testdata/fixtures/basic/sys
 ```
+
+## Dependencies
+
+Everything under `internal/` and `pkg/` is pure Go with no third-party
+runtime dependencies of its own. The direct module dependencies, one per
+binary or subsystem that needs them:
+
+| Module | Used by | Purpose |
+|---|---|---|
+| [`mappu/miqt`](https://github.com/mappu/miqt) | `hwt-gui` | Go bindings to Qt 6, the desktop GUI toolkit |
+| [`charmbracelet/bubbletea`](https://github.com/charmbracelet/bubbletea) | `hwt` | Terminal UI framework |
+| [`charmbracelet/lipgloss`](https://github.com/charmbracelet/lipgloss) | `hwt` | Terminal styling for the TUI |
+| [`pelletier/go-toml/v2`](https://github.com/pelletier/go-toml) | `hwtd` | Parses `/etc/hw-t/config.toml` |
+| [`prometheus/client_golang`](https://github.com/prometheus/client_golang) | `hwtd` | Serves the `/metrics` endpoint |
+| [`gopkg.in/yaml.v3`](https://github.com/go-yaml/yaml) | `internal/core` | YAML report format (`hwtctl report -format yaml`) |
+| [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) | `internal/providers/cpu`, `internal/providers/system` | Low-level syscalls (`uname`, `sysinfo`) not in the standard library |
+
+See `go.mod` for the full transitive graph. None of it replaces a
+hardware driver or vendor tool; the non-Go dependencies HW-T actually
+talks to (`nvidia-smi`, `smartctl`, `hwdata`, the kernel itself) are
+listed under Prerequisites above.
 
 ## License
 

@@ -28,6 +28,14 @@ func TestEnrichLabel(t *testing.T) {
 		// Voltage rails and driver labels.
 		{"it87", "in5", "+12V", "+12V Rail"},
 		{"amdgpu", "in0", "vddgpu", "GPU Core Voltage"},
+		// zenpower SVI2 telemetry (AMD CPU core/SoC voltage, current,
+		// power), confirmed against a real Ryzen 3900X's `sensors` output.
+		{"zenpower", "in0", "SVI2_Core", "CPU Core Voltage"},
+		{"zenpower", "in1", "SVI2_SoC", "CPU SoC Voltage"},
+		{"zenpower", "curr0", "SVI2_C_Core", "CPU Core Current"},
+		{"zenpower", "curr1", "SVI2_C_SoC", "CPU SoC Current"},
+		{"zenpower", "power0", "SVI2_P_Core", "CPU Core Power (SVI2)"},
+		{"zenpower", "power1", "SVI2_P_SoC", "CPU SoC Power (SVI2)"},
 		// Driver-provided labels pass through untouched.
 		{"nvidia", "temp", "GPU Temp", "GPU Temp"},
 		{"weirdchip", "inx", "inx", "inx"},

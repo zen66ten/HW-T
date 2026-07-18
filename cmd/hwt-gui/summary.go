@@ -101,6 +101,25 @@ func sensorByChannel(sensors []client.Sensor, devID string, channels ...string) 
 	return ""
 }
 
+// voltageByLabel returns the ID of the first voltage sensor whose enriched
+// label matches one of names, searching all sensors since voltage rails
+// live on a motherboard Super-I/O chip, not the CPU device. Returns "" when
+// no driver exposes a matching rail.
+func voltageByLabel(sensors []client.Sensor, names ...string) string {
+	for _, s := range sensors {
+		if core.Kind(s.Kind) != core.KindIn {
+			continue
+		}
+		label := core.EnrichLabel(s.DeviceName, channelOf(s), s.Label)
+		for _, n := range names {
+			if label == n {
+				return s.ID
+			}
+		}
+	}
+	return ""
+}
+
 func attr(d *client.Device, key string) string {
 	if d == nil {
 		return ""
@@ -217,6 +236,16 @@ func (u *ui) buildCPU(devices []client.Device, sensors []client.Sensor) *qt6.QGr
 		cc.SetColumnStretch(i*2+1, 1)
 	}
 	root.AddLayout(cc.QLayout)
+
+	// Live CPU voltages. On AMD these come from the SVI2 telemetry the
+	// zenpower driver exposes (k10temp reports none); on Intel/other boards
+	// from a Super-I/O chip. Reads "-" until such a driver is loaded.
+	vr := hbox(5)
+	vr.AddWidget(capL("Core Voltage").QWidget)
+	vr.AddWidget2(u.liveField(voltageByLabel(sensors, "CPU Core Voltage"), core.KindIn).QWidget, 1)
+	vr.AddWidget(capL("SoC Voltage").QWidget)
+	vr.AddWidget2(u.liveField(voltageByLabel(sensors, "CPU SoC Voltage"), core.KindIn).QWidget, 1)
+	root.AddLayout(vr.QLayout)
 
 	root.AddWidget(buildFeatures(attr(info, "instructions")).QWidget)
 	root.AddWidget(u.opTable(sensors).QWidget)

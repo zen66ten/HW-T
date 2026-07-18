@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,11 +16,26 @@ import (
 
 // sensorTree is the HWiNFO-style Sensor Status table: one group row per
 // chip/device, one child row per sensor with a kind icon and
-// current/min/max/avg columns.
+// current/min/max/avg columns. Runs of near-identical per-core sensors
+// (Core 0 Clock, Core 1 Clock, ...) collapse under one aggregate parent
+// that shows their combined current/min/max/avg, expandable for detail.
 type sensorTree struct {
-	w    *qt6.QTreeWidget
-	rows map[string]*qt6.QTreeWidgetItem
+	w      *qt6.QTreeWidget
+	rows   map[string]*qt6.QTreeWidgetItem
+	groups []aggGroup
 }
+
+// aggGroup is a collapsible parent row whose value columns are the
+// aggregate of its member sensors, recomputed each tick.
+type aggGroup struct {
+	item    *qt6.QTreeWidgetItem
+	kind    core.Kind
+	members []string // member sensor IDs
+}
+
+// aggThreshold is how many same-family sensors it takes before they fold
+// into a collapsible group instead of listing individually.
+const aggThreshold = 4
 
 // Cached brushes for value coloring (allocated once, reused every tick).
 var (
@@ -122,51 +138,159 @@ func channelOf(s client.Sensor) string {
 }
 
 // rebuild recreates the whole table for a new sensor set: one spanned,
-// teal group row per device, one child row per sensor with its kind icon
-// and descriptive name.
+// teal group row per device. Within each device, families of per-core
+// sensors fold into a collapsed aggregate parent; everything else lists
+// directly under the device.
 func (t *sensorTree) rebuild(devices []client.Device, sensors []client.Sensor) {
 	t.w.Clear()
 	t.rows = map[string]*qt6.QTreeWidgetItem{}
+	t.groups = nil
 
 	bold := qt6.NewQFont()
 	bold.SetBold(true)
 
-	var group *qt6.QTreeWidgetItem
-	lastDev := ""
-	for _, s := range sensors {
-		if group == nil || s.Device != lastDev {
-			lastDev = s.Device
-			group = qt6.NewQTreeWidgetItem3(t.w)
-			group.SetText(0, core.DisplayName(s.DeviceName))
-			group.SetFont(0, bold)
-			group.SetForeground(0, brushHead)
-			group.SetFirstColumnSpanned(true)
-			// PCI AER error counters are a long, rarely interesting
-			// list; keep those groups collapsed by default.
-			group.SetExpanded(s.Provider != "pci")
+	for i := 0; i < len(sensors); {
+		// Slice off the next run of sensors sharing one device.
+		dev := sensors[i].Device
+		j := i
+		for j < len(sensors) && sensors[j].Device == dev {
+			j++
 		}
-		item := qt6.NewQTreeWidgetItem6(group)
-		label := core.EnrichLabel(s.DeviceName, channelOf(s), s.Label)
-		item.SetText(0, label)
-		kind := core.Kind(s.Kind)
-		if kind == core.KindPercent && strings.Contains(strings.ToLower(label), "fan") {
-			kind = core.KindFan // fan duty reported as %, still a fan
+		block := sensors[i:j]
+		i = j
+
+		devItem := qt6.NewQTreeWidgetItem3(t.w)
+		devItem.SetText(0, core.DisplayName(block[0].DeviceName))
+		devItem.SetFont(0, bold)
+		devItem.SetForeground(0, brushHead)
+		devItem.SetFirstColumnSpanned(true)
+		// PCI AER error counters are a long, rarely interesting list;
+		// keep those device groups collapsed by default.
+		devItem.SetExpanded(block[0].Provider != "pci")
+
+		for _, fam := range families(block) {
+			if len(fam.members) >= aggThreshold {
+				parent := qt6.NewQTreeWidgetItem6(devItem)
+				parent.SetText(0, fam.label)
+				if ic := kindIcon(iconKind(fam.members[0])); ic != nil {
+					parent.SetIcon(0, ic)
+				}
+				for c := 1; c <= 4; c++ {
+					parent.SetTextAlignment2(c, qt6.AlignRight|qt6.AlignVCenter)
+				}
+				parent.SetExpanded(false) // collapsed: show the aggregate, hide the cores
+				ids := make([]string, 0, len(fam.members))
+				for _, s := range fam.members {
+					t.addLeaf(parent, s)
+					ids = append(ids, s.ID)
+				}
+				t.groups = append(t.groups, aggGroup{
+					item: parent, kind: core.Kind(fam.members[0].Kind), members: ids,
+				})
+				continue
+			}
+			for _, s := range fam.members {
+				t.addLeaf(devItem, s)
+			}
 		}
-		if ic := kindIcon(kind); ic != nil {
-			item.SetIcon(0, ic)
-		}
-		for c := 1; c <= 4; c++ {
-			item.SetTextAlignment2(c, qt6.AlignRight|qt6.AlignVCenter)
-		}
-		t.rows[s.ID] = item
 	}
+}
+
+// addLeaf appends one sensor row under parent and registers it for updates.
+func (t *sensorTree) addLeaf(parent *qt6.QTreeWidgetItem, s client.Sensor) {
+	item := qt6.NewQTreeWidgetItem6(parent)
+	item.SetText(0, enriched(s))
+	if ic := kindIcon(iconKind(s)); ic != nil {
+		item.SetIcon(0, ic)
+	}
+	for c := 1; c <= 4; c++ {
+		item.SetTextAlignment2(c, qt6.AlignRight|qt6.AlignVCenter)
+	}
+	t.rows[s.ID] = item
+}
+
+// enriched is the display label for a sensor.
+func enriched(s client.Sensor) string {
+	return core.EnrichLabel(s.DeviceName, channelOf(s), s.Label)
+}
+
+// iconKind is the sensor's kind for icon selection, treating fan-duty
+// percentages as fans so they get the fan icon rather than the bar icon.
+func iconKind(s client.Sensor) core.Kind {
+	kind := core.Kind(s.Kind)
+	if kind == core.KindPercent && strings.Contains(strings.ToLower(enriched(s)), "fan") {
+		return core.KindFan
+	}
+	return kind
+}
+
+// family is a set of sensors whose labels differ only by an index number.
+type family struct {
+	label   string // aggregate parent name, e.g. "Core Clocks"
+	members []client.Sensor
+}
+
+var digitsRE = regexp.MustCompile(`\d+`)
+
+// families partitions a device's sensors into groups whose labels match
+// once their first number is blanked out ("Core 0 Clock" and "Core 1
+// Clock" share a family; "Core 0 Clock" and "Core 0 Effective Clock" do
+// not). Order follows first appearance. Sensors with no number are each
+// their own singleton family.
+func families(block []client.Sensor) []family {
+	order := []string{}
+	byKey := map[string]*family{}
+	for _, s := range block {
+		lbl := enriched(s)
+		key := familyKey(lbl)
+		f, ok := byKey[key]
+		if !ok {
+			f = &family{label: familyLabel(lbl)}
+			byKey[key] = f
+			order = append(order, key)
+		}
+		f.members = append(f.members, s)
+	}
+	out := make([]family, 0, len(order))
+	for _, k := range order {
+		out = append(out, *byKey[k])
+	}
+	return out
+}
+
+// familyKey replaces the first run of digits with a placeholder so that
+// only labels differing solely by that number group together.
+func familyKey(label string) string {
+	loc := digitsRE.FindStringIndex(label)
+	if loc == nil {
+		return label
+	}
+	return label[:loc[0]] + "#" + label[loc[1]:]
+}
+
+// familyLabel builds the aggregate parent name by dropping the index
+// number and pluralizing: "Core 0 Effective Clock" -> "Core Effective
+// Clocks".
+func familyLabel(label string) string {
+	loc := digitsRE.FindStringIndex(label)
+	if loc == nil {
+		return label
+	}
+	stripped := strings.Join(strings.Fields(label[:loc[0]]+label[loc[1]:]), " ")
+	if stripped != "" && !strings.HasSuffix(stripped, "s") {
+		stripped += "s"
+	}
+	return stripped
 }
 
 // update refreshes the value columns in place. The current value goes
 // orange above the sensor's high limit and red above critical; health
-// sensors render PASSED green / FAILED red.
+// sensors render PASSED green / FAILED red. Aggregate group parents are
+// recomputed from their members afterwards.
 func (t *sensorTree) update(sensors []client.Sensor) {
+	snap := make(map[string]client.Sensor, len(sensors))
 	for _, s := range sensors {
+		snap[s.ID] = s
 		item, ok := t.rows[s.ID]
 		if !ok {
 			continue
@@ -201,6 +325,47 @@ func (t *sensorTree) update(sensors []client.Sensor) {
 			item.SetForeground(i+2, brushDim)
 		}
 	}
+	for _, g := range t.groups {
+		updateGroup(g, snap)
+	}
+}
+
+// updateGroup fills an aggregate parent's columns: mean current and
+// average across members, minimum of minimums, maximum of maximums.
+func updateGroup(g aggGroup, snap map[string]client.Sensor) {
+	var curSum, avgSum, minV, maxV float64
+	n := 0
+	for _, id := range g.members {
+		s, ok := snap[id]
+		if !ok || s.Err != "" || s.N == 0 {
+			continue
+		}
+		curSum += s.Cur
+		avgSum += s.Avg
+		if n == 0 || s.Min < minV {
+			minV = s.Min
+		}
+		if n == 0 || s.Max > maxV {
+			maxV = s.Max
+		}
+		n++
+	}
+	if n == 0 {
+		g.item.SetText(1, "N/A")
+		g.item.SetForeground(1, brushDim)
+		for c := 2; c <= 4; c++ {
+			g.item.SetText(c, "")
+		}
+		return
+	}
+	g.item.SetText(1, core.FormatValue(g.kind, curSum/float64(n)))
+	g.item.SetForeground(1, brushValue)
+	g.item.SetText(2, core.FormatValue(g.kind, minV))
+	g.item.SetForeground(2, brushDim)
+	g.item.SetText(3, core.FormatValue(g.kind, maxV))
+	g.item.SetForeground(3, brushDim)
+	g.item.SetText(4, core.FormatValue(g.kind, avgSum/float64(n)))
+	g.item.SetForeground(4, brushDim)
 }
 
 // overLimit reports whether the current value crossed any of the named

@@ -1,12 +1,20 @@
 package main
 
 import (
+	"embed"
 	"strings"
 
 	"github.com/mappu/miqt/qt6"
 
 	"github.com/zen66ten/HW-T/internal/core"
 )
+
+// logoFS holds the vendor wordmarks (real trademarked artwork, embedded so
+// the binary is self-contained). They are black/colored on transparent, so
+// badges render them on a white plate to stay readable in the dark theme.
+//
+//go:embed assets/*.png
+var logoFS embed.FS
 
 // kindIcon returns the 16x16 icon shown next to a sensor row, keyed by
 // sensor kind: red thermometer for temperatures, cyan clock face for
@@ -158,9 +166,98 @@ func logoLabel(html, boxQSS string) *qt6.QLabel {
 	return l
 }
 
+// logoPixmapCache holds each vendor logo scaled once to badge size. A nil
+// entry means "tried and failed" so we don't re-read a missing asset.
+var logoPixmapCache = map[string]*qt6.QPixmap{}
+
+// logoPixmap decodes an embedded vendor PNG and scales it to fit inside the
+// badge plate, preserving aspect ratio. Returns nil if the asset is missing
+// or undecodable, so callers fall back to the drawn-glyph badge.
+func logoPixmap(name string) *qt6.QPixmap {
+	if pm, ok := logoPixmapCache[name]; ok {
+		return pm
+	}
+	data, err := logoFS.ReadFile("assets/" + name + ".png")
+	if err != nil {
+		logoPixmapCache[name] = nil
+		return nil
+	}
+	pm := qt6.NewQPixmap()
+	if !pm.LoadFromDataWithData(data) || pm.IsNull() {
+		logoPixmapCache[name] = nil
+		return nil
+	}
+	scaled := pm.Scaled3(102, 66, qt6.KeepAspectRatio, qt6.SmoothTransformation)
+	logoPixmapCache[name] = scaled
+	return scaled
+}
+
+// logoBadge builds a 118x94 white plate holding the named vendor logo.
+// Returns nil when the asset is unavailable.
+func logoBadge(name string) *qt6.QLabel {
+	pm := logoPixmap(name)
+	if pm == nil {
+		return nil
+	}
+	l := qt6.NewQLabel3("")
+	l.SetPixmap(pm)
+	l.SetAlignment(qt6.AlignCenter)
+	l.SetStyleSheet("background-color:#f4f4f4; border:1px solid #3b3b3b; border-radius:3px;")
+	l.SetFixedWidth(118)
+	l.SetFixedHeight(94)
+	return l
+}
+
 // cpuLogo picks the CPU vendor badge from the cpuinfo vendor string and
-// model name.
+// model name, preferring the real embedded logo and falling back to a
+// drawn-glyph badge if the asset is missing.
 func cpuLogo(vendor, model string) *qt6.QLabel {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(vendor, "AuthenticAMD") || strings.Contains(m, "amd"):
+		if strings.Contains(m, "ryzen") {
+			if b := logoBadge("ryzen"); b != nil {
+				return b
+			}
+		}
+		if b := logoBadge("amd"); b != nil {
+			return b
+		}
+	case strings.Contains(vendor, "GenuineIntel") || strings.Contains(m, "intel"):
+		if b := logoBadge("intel"); b != nil {
+			return b
+		}
+	}
+	return cpuLogoGlyph(vendor, model)
+}
+
+// gpuLogo picks the GPU vendor badge from the provider name and device name.
+func gpuLogo(provider, name string) *qt6.QLabel {
+	n := strings.ToLower(name)
+	switch {
+	case provider == "nvidia" || strings.Contains(n, "nvidia") || strings.Contains(n, "geforce"):
+		if b := logoBadge("nvidia"); b != nil {
+			return b
+		}
+	case provider == "amdgpu" || strings.Contains(n, "radeon") || strings.Contains(n, "amd"):
+		if b := logoBadge("amd"); b != nil { // no separate Radeon mark; AMD stands in
+			return b
+		}
+	case provider == "intel" || strings.Contains(n, "arc") || strings.Contains(n, "intel"):
+		logo := "intel"
+		if strings.Contains(n, "arc") {
+			logo = "intel-arc"
+		}
+		if b := logoBadge(logo); b != nil {
+			return b
+		}
+	}
+	return gpuLogoGlyph(provider, name)
+}
+
+// cpuLogoGlyph is the drawn-glyph fallback badge used when no embedded logo
+// asset matches the CPU vendor.
+func cpuLogoGlyph(vendor, model string) *qt6.QLabel {
 	m := strings.ToLower(model)
 	switch {
 	case strings.Contains(vendor, "AuthenticAMD") || strings.Contains(m, "amd"):
@@ -189,8 +286,8 @@ func cpuLogo(vendor, model string) *qt6.QLabel {
 		"background-color:#141517; border:1px solid #3b3b3b;")
 }
 
-// gpuLogo picks the GPU vendor badge from the provider name and device name.
-func gpuLogo(provider, name string) *qt6.QLabel {
+// gpuLogoGlyph is the drawn-glyph fallback badge for GPUs.
+func gpuLogoGlyph(provider, name string) *qt6.QLabel {
 	n := strings.ToLower(name)
 	switch {
 	case provider == "nvidia" || strings.Contains(n, "nvidia") || strings.Contains(n, "geforce"):
