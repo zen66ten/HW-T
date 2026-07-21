@@ -23,7 +23,7 @@ reports, or point Prometheus and Grafana at the built-in metrics endpoint.
 
 ## Why?
 
-For years it annoyed me that Linux has no real equivalent of HWiNFO64.
+Linux has no real equivalent of HWiNFO64.
 The information itself is available, but it is spread across a dozen
 separate utilities: `lm-sensors` for the motherboard, `smartctl` for
 drives, `nvidia-smi` for the GPU, `dmidecode` for the BIOS and memory,
