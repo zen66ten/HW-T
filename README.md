@@ -21,21 +21,6 @@ values live in a native desktop app or in the terminal, query them from
 scripts, log them to CSV, set temperature alerts, export full hardware
 reports, or point Prometheus and Grafana at the built-in metrics endpoint.
 
-## Why?
-
-Linux has no real equivalent of HWiNFO64.
-The information itself is available, but it is spread across a dozen
-separate utilities: `lm-sensors` for the motherboard, `smartctl` for
-drives, `nvidia-smi` for the GPU, `dmidecode` for the BIOS and memory,
-and so on. No single tool covers all of it. HW-T collects those sources
-into one coherent view.
-
-Two principles guide the design. First, HW-T is an aggregator and a
-presenter. It reads hardware state through stable kernel interfaces and
-proven tools, and it never reimplements drivers in userspace. Second, it
-is strictly read-only. It will never write to fan controllers, embedded
-controllers, or CPU registers.
-
 ## Features
 
 - **Live sensors panel.** Every sensor on the system, grouped by chip,
